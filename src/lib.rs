@@ -1,63 +1,54 @@
 use std::{
     collections::VecDeque,
-    sync::{Arc, Mutex, Once, mpsc},
+    sync::{
+        Arc, Mutex, Once,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
 };
 
 type Task = Box<dyn FnOnce() + Send + 'static>;
-type ArcMutex<T> = Arc<Mutex<T>>;
-
-struct Channel {
-    tx: mpsc::Sender<Task>,
-    rx: ArcMutex<mpsc::Receiver<Task>>,
-}
-
-impl Default for Channel {
-    fn default() -> Self {
-        let (tx, rx) = mpsc::channel();
-        Self {
-            tx,
-            rx: Arc::new(Mutex::new(rx)),
-        }
-    }
-}
 
 pub struct WPool {
     //stop_lock: Mutex<bool>,
     //waiting_len: u32,
     max_workers: usize,
-    task_queue: Channel,
-    worker_queue: Channel,
-    waiting_queue: ArcMutex<VecDeque<Task>>,
+    task_queue: mpsc::Sender<Task>,
+    worker_queue: mpsc::Sender<()>,
+    waiting_queue: Arc<Mutex<VecDeque<Task>>>,
     stop_once: Once,
-    is_stopped: bool,
-    is_waiting: bool,
-    handles: ArcMutex<Vec<thread::JoinHandle<()>>>,
+    handles: Arc<Mutex<Vec<thread::JoinHandle<()>>>>,
     dispatch_handle: Option<thread::JoinHandle<()>>,
+    is_stopped: Arc<AtomicBool>,
+    is_waiting: Arc<AtomicBool>,
 }
 
 impl WPool {
     pub fn new(max_workers: usize) -> Self {
+        let (task_tx, task_rx) = mpsc::channel();
+        let (worker_tx, worker_rx) = mpsc::channel();
+
         let mut this = Self {
             //stop_lock: Mutex::new(true),
             //waiting_len: 0,
             max_workers,
-            task_queue: Channel::default(),
-            worker_queue: Channel::default(),
+            task_queue: task_tx,
+            worker_queue: worker_tx,
             waiting_queue: Arc::new(Mutex::new(VecDeque::new())),
             stop_once: Once::new(),
-            is_stopped: false,
-            is_waiting: false,
             handles: Arc::new(Mutex::new(Vec::new())),
             dispatch_handle: None,
+            is_stopped: Arc::new(AtomicBool::new(false)),
+            is_waiting: Arc::new(AtomicBool::new(false)),
         };
 
         // Fill worker_queue with tokens (as semaphore)
         for _ in 0..max_workers {
-            this.worker_queue.tx.send(Box::new(|| {})).unwrap();
+            this.worker_queue.send(()).unwrap();
         }
 
-        this.dispatch_handle = this.dispatch();
+        this.dispatch_handle = this.dispatch(task_rx, worker_rx);
         this
     }
 
@@ -69,11 +60,10 @@ impl WPool {
     where
         F: FnOnce() + Send + 'static,
     {
-        if let Err(e) = self.task_queue.tx.send(Box::new(f)) {
-            // fallback to waiting queue if task queue fails
-            let task = e.0; // recover ownership of the task
-            self.waiting_queue.lock().unwrap().push_back(task);
+        if self.is_stopped.load(Ordering::Relaxed) {
+            return;
         }
+        let _ = self.task_queue.send(Box::new(f));
     }
 
     // Enqueues the given function and waits for it to be executed.
@@ -82,13 +72,11 @@ impl WPool {
         F: FnOnce() + Send + 'static,
     {
         let (done_tx, done_rx) = mpsc::channel::<()>();
-
         // submit task normally (to task_queue)
         self.submit(move || {
             f();
             let _ = done_tx.send(()); // signal completion
         });
-
         done_rx.recv().unwrap(); // blocks until complete
     }
 
@@ -97,10 +85,12 @@ impl WPool {
         self.stop(true);
     }
 
-    fn dispatch(&self) -> Option<thread::JoinHandle<()>> {
-        let task_rx = Arc::clone(&self.task_queue.rx);
-        let worker_rx = Arc::clone(&self.worker_queue.rx);
-        let worker_tx = self.worker_queue.tx.clone();
+    fn dispatch(
+        &self,
+        task_rx: mpsc::Receiver<Task>,
+        worker_rx: mpsc::Receiver<()>,
+    ) -> Option<thread::JoinHandle<()>> {
+        let worker_tx = self.worker_queue.clone();
         let waiting_queue = Arc::clone(&self.waiting_queue);
         let handles = Arc::clone(&self.handles);
 
@@ -111,12 +101,12 @@ impl WPool {
                     .lock()
                     .unwrap()
                     .pop_front()
-                    .or_else(|| task_rx.lock().unwrap().try_recv().ok());
+                    .or_else(|| task_rx.try_recv().ok());
 
                 match task_maybe {
                     Some(task) => {
                         // No available worker → push to waiting queue
-                        if worker_rx.lock().unwrap().recv().is_err() {
+                        if worker_rx.recv().is_err() {
                             waiting_queue.lock().unwrap().push_front(task);
                             return;
                         }
@@ -126,16 +116,14 @@ impl WPool {
                         let handle = thread::spawn(move || {
                             (task)();
                             // Release worker back to worker queue
-                            worker_tx_clone.send(Box::new(|| {})).unwrap();
+                            let _ = worker_tx_clone.send(());
                         });
 
                         handles.lock().unwrap().push(handle);
                     }
                     None => {
                         // If no tasks and waiting queue is empty
-                        if task_rx.lock().unwrap().try_recv().is_err()
-                            && waiting_queue.lock().unwrap().is_empty()
-                        {
+                        if task_rx.try_recv().is_err() && waiting_queue.lock().unwrap().is_empty() {
                             break;
                         }
                     }
@@ -146,7 +134,7 @@ impl WPool {
 
     fn stop(&mut self, wait: bool) {
         self.stop_once.call_once(|| {
-            drop(self.task_queue.tx.clone()); // close task queue
+            drop(self.task_queue.clone()); // close task queue
 
             // Wait for dispatch thread to end
             if let Some(dh) = self.dispatch_handle.take() {
@@ -159,8 +147,8 @@ impl WPool {
                 h.join().unwrap();
             }
 
-            self.is_waiting = wait;
-            self.is_stopped = true;
+            self.is_waiting.store(wait, Ordering::Relaxed);
+            self.is_stopped.store(true, Ordering::Relaxed);
         });
     }
 }
