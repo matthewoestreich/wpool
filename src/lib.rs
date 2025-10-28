@@ -112,7 +112,6 @@ impl WPool {
         thread::spawn(move || {
             loop {
                 println!(".");
-                // Block until we either get a task or terminate signal
                 let task = match task_rx.recv_timeout(Duration::from_millis(50)) {
                     Ok(task_signal) => match task_signal {
                         Signal::Job(task) => {
@@ -158,16 +157,16 @@ impl WPool {
                                 "dispatch() -> worker_tx.try_send() -> unable to send to worker, all full -> at max workers, adding to waiting queue"
                             );
                             // Add to waiting_queue
-                            let mut q = core.waiting_queue.lock().unwrap();
-                            q.push_back(task);
+                            core.waiting_queue.lock().unwrap().push_back(task);
                         }
                     }
                     Err(TrySendError::Disconnected(_)) => {
+                        // Worker channel closed
                         println!(
                             "dispatch() -> worker_tx.try_send() -> disconnected, worker channel closed"
                         );
                         break;
-                    } // Worker channel closed
+                    }
                 }
             }
             println!("dispatch() -> broken out of loop");
