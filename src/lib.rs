@@ -173,6 +173,7 @@ impl WPool {
         })
     }
 
+    // FIXME : maybe avoid wrapping receiver in mutex and just use arc?
     fn worker(worker_rx: Arc<Mutex<mpsc::Receiver<Signal>>>) -> thread::JoinHandle<()> {
         println!("worker() -> before spawning worker thread");
         thread::spawn(move || {
