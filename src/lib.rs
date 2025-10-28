@@ -21,7 +21,6 @@ struct WPoolCore {
     //stop_lock: Mutex<bool>,
     //waiting_len: u32,
     max_workers: usize,
-    task_queue: mpsc::Sender<Signal>,
     worker_queue: mpsc::SyncSender<Signal>,
     waiting_queue: Mutex<VecDeque<Task>>,
     dispatch_handle: Mutex<Option<thread::JoinHandle<()>>>,
@@ -33,6 +32,7 @@ struct WPoolCore {
 
 pub struct WPool {
     core: Arc<WPoolCore>,
+    task_queue: Option<mpsc::Sender<Signal>>,
 }
 
 impl WPool {
@@ -44,7 +44,6 @@ impl WPool {
             //stop_lock: Mutex::new(true),
             //waiting_len: 0,
             max_workers,
-            task_queue: task_tx,
             worker_queue: worker_tx,
             waiting_queue: Mutex::new(VecDeque::new()),
             stop_once: Once::new(),
@@ -56,6 +55,7 @@ impl WPool {
 
         let this = Self {
             core: Arc::clone(&core),
+            task_queue: Some(task_tx),
         };
 
         *core.dispatch_handle.lock().unwrap() = Some(Self::dispatch(
@@ -79,7 +79,9 @@ impl WPool {
             println!("submit(f) -> tried to submit to a stopped pool!");
             return;
         }
-        let _ = self.core.task_queue.send(Signal::Job(Box::new(f)));
+        if let Some(tx) = &self.task_queue {
+            let _ = tx.send(Signal::Job(Box::new(f)));
+        }
     }
 
     // Enqueues the given function and waits for it to be executed.
@@ -113,29 +115,32 @@ impl WPool {
             loop {
                 println!(".");
                 let task = match task_rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(task_signal) => match task_signal {
-                        Signal::Job(task) => {
-                            println!("dispatch() -> task_rx.recv_timeout -> signal is a task");
-                            task
-                        }
-                        _ => {
-                            println!(
-                                "dispatch() -> task_rx.recv_timeout -> signal not a task, breaking."
-                            );
-                            break;
-                        }
-                    },
+                    Ok(Signal::Job(task)) => {
+                        println!(
+                            "dispatch() -> task_rx.recv_timeout(..) -> Ok(signal) -> signal is a task"
+                        );
+                        task
+                    }
+                    Ok(_) => {
+                        println!(
+                            "dispatch() -> task_rx.recv_timeout(..) -> Ok(signal) -> signal is NOT a task"
+                        );
+                        break;
+                    }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
-                        if task_rx.try_recv().is_err() {
-                            // no more tasks...
-                            break;
-                        }
+                        // If pool is stopped, break loop.
+                        println!(
+                            "dispatch() -> task_rx.recv_timeout(..) -> Err(Timeout) -> did not get task in allowed time, continuing main loop."
+                        );
                         continue;
                     }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        println!("dispatch() -> task channel closed, breaking.");
+                        break;
+                    }
                 };
 
-                // Non blocking. If sending fails, it means workers are all busy so add task to waiting_queue.
+                // Non blocking. If sending fails, it means workers are all busy so add task to waiting_queue, or channel was closed.
                 match worker_tx.try_send(Signal::Job(task)) {
                     Ok(_) => {
                         println!(
@@ -144,10 +149,11 @@ impl WPool {
                         // Spawn new worker if we are not at max_workers
                         let mut workers = core.worker_handles.lock().unwrap();
                         if workers.len() < max_workers {
-                            let worker_handle = WPool::worker(Arc::clone(&worker_rx));
+                            let worker_handle =
+                                WPool::worker(workers.len(), Arc::clone(&worker_rx));
                             workers.push(worker_handle);
                             println!(
-                                "dispatch() -> worker_tx.try_send() -> unable to send to worker, all full -> not at max workers, spawning worker"
+                                "dispatch() -> worker_tx.try_send() -> unable to give task to worker, all busy but not at max workers, so spawning new worker"
                             );
                         }
                     }
@@ -174,22 +180,21 @@ impl WPool {
     }
 
     // FIXME : maybe avoid wrapping receiver in mutex and just use arc?
-    fn worker(worker_rx: Arc<Mutex<mpsc::Receiver<Signal>>>) -> thread::JoinHandle<()> {
-        println!("worker() -> before spawning worker thread");
+    fn worker(id: usize, worker_rx: Arc<Mutex<mpsc::Receiver<Signal>>>) -> thread::JoinHandle<()> {
         thread::spawn(move || {
             loop {
-                println!("~w~");
+                println!("~w_{id}~");
                 let signal = {
                     let receiver = worker_rx.lock().unwrap();
                     receiver.recv().unwrap()
                 };
                 match signal {
                     Signal::Job(task) => {
-                        println!("worker() -> got task");
+                        println!("worker() -> id={id} -> got task");
                         task();
                     }
                     _ => {
-                        println!("worker() -> exiting");
+                        println!("worker() -> id={id} -> signalled to terminate -> exiting");
                         break;
                     }
                 }
@@ -202,8 +207,10 @@ impl WPool {
             self.core.is_stopped.store(true, Ordering::Relaxed);
             self.core.is_waiting.store(wait, Ordering::Relaxed);
 
-            println!("shutdown() -> dropping task_queue");
-            drop(self.core.task_queue.clone());
+            println!("shutdown() -> closing task_queue");
+            if let Some(task_queue) = self.task_queue.take() {
+                drop(task_queue);
+            }
 
             if let Some(handle) = self.core.dispatch_handle.lock().unwrap().take() {
                 println!("shutdown() -> got dispatch_hande, about to join()");
@@ -211,21 +218,16 @@ impl WPool {
                 println!("shutdown() -> done calling join on dispatcch_handle : {dh:?}");
             }
 
-            let workers = self.core.worker_handles.lock().unwrap();
-            println!("shutdown() -> workers = {workers:?}");
+            let mut workers = self.core.worker_handles.lock().unwrap();
+            println!(
+                "shutdown() -> sending terminate signal to all workers -> workers='{workers:?}'"
+            );
             for _ in 0..workers.len() {
-                println!("shutdown() -> sending terminate to a worker");
                 let _ = self.core.worker_queue.send(Signal::Terminate);
-                println!("shutdown() -> done, sent terminate to a worker");
             }
-            drop(workers);
-            println!("done shutting down workers.");
-
-            let mut handles = self.core.worker_handles.lock().unwrap();
-            println!("shutdown() -> worker_handles = {handles:?}");
-            for h in handles.drain(..) {
-                println!("shutdown() -> joining a worker thread");
-                let _ = h.join();
+            println!("shutdown() -> joining worker threads");
+            for w in workers.drain(..) {
+                let _ = w.join();
             }
 
             println!("shutdown() -> done.");
