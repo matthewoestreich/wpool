@@ -2,10 +2,9 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc, Mutex,
-        mpsc::{self, TrySendError},
+        mpsc::{self, RecvError, TrySendError},
     },
     thread,
-    time::Duration,
 };
 
 use crate::{Signal, Task, ThreadedSyncChannel, worker::Worker};
@@ -38,7 +37,8 @@ impl Dispatcher {
         *this.handle.lock().unwrap() = Some(thread::spawn(move || {
             loop {
                 println!(".");
-                let task = match task_receiver.recv_timeout(Duration::from_millis(50)) {
+                // Blocks until we get a task or the task channel is closed.
+                let task = match task_receiver.recv() {
                     Ok(Signal::Job(task)) => {
                         println!(
                             "dispatch() -> task_rx.recv_timeout(..) -> Ok(signal) -> signal is a task"
@@ -49,15 +49,11 @@ impl Dispatcher {
                         println!(
                             "dispatch() -> task_rx.recv_timeout(..) -> Ok(signal) -> signal is NOT a task"
                         );
-                        break;
-                    }
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        println!(
-                            "dispatch() -> task_rx.recv_timeout(..) -> Err(Timeout) -> did not get task in allowed time, continuing main loop."
-                        );
+                        // Pretty sure we should just continue here (vs break). The dispatcher shouldn't
+                        // care if the signal is a task or terminate or pause or whatever..
                         continue;
                     }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    Err(RecvError) => {
                         println!("dispatch() -> task channel closed, breaking.");
                         break;
                     }
