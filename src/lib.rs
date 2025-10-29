@@ -86,7 +86,7 @@ impl Dispatcher {
         }
     }
 
-    fn start(self: &Arc<Self>) {
+    fn spawn(self: &Arc<Self>) {
         let this = Arc::clone(self);
         let task_rx = Arc::clone(&this.task_receiver);
         let worker_rx = Arc::clone(&this.worker_channel.receiver);
@@ -201,7 +201,7 @@ impl WPool {
             stop_once: Once::new(),
         };
 
-        this.dispatcher.start();
+        this.dispatcher.spawn();
         this
     }
 
