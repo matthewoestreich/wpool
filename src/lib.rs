@@ -28,21 +28,21 @@ struct Worker {
 }
 
 impl Worker {
-    fn spawn(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Signal>>>) -> Self {
+    fn spawn(receiver: Arc<Mutex<mpsc::Receiver<Signal>>>, id: Option<usize>) -> Self {
         let handle = thread::spawn(move || {
             loop {
-                println!("~w_{id}~");
+                println!("~w_{id:?}~");
                 let signal = {
                     let receiver = receiver.lock().unwrap();
                     receiver.recv().unwrap()
                 };
                 match signal {
                     Signal::Job(task) => {
-                        println!("worker() -> id={id} -> got task");
+                        println!("worker() -> id={id:?} -> got task");
                         task();
                     }
                     _ => {
-                        println!("worker() -> id={id} -> signalled to terminate -> exiting");
+                        println!("worker() -> id={id:?} -> signalled to terminate -> exiting");
                         break;
                     }
                 }
@@ -133,7 +133,7 @@ impl Dispatcher {
                         // Spawn new worker if we are not at max_workers
                         let mut workers = this.workers.lock().unwrap();
                         if workers.len() < this.max_workers {
-                            let worker = Worker::spawn(workers.len(), Arc::clone(&worker_rx));
+                            let worker = Worker::spawn(Arc::clone(&worker_rx), Some(workers.len()));
                             workers.push(worker);
                             println!(
                                 "dispatch() -> worker_tx.try_send() -> unable to give task to worker, all busy but not at max workers, so spawning new worker"
