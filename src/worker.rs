@@ -11,29 +11,21 @@ pub(crate) struct Worker {
 }
 
 impl Worker {
-    pub(crate) fn spawn(receiver: Arc<Mutex<mpsc::Receiver<Signal>>>, id: Option<usize>) -> Self {
+    pub(crate) fn spawn(receiver: Arc<Mutex<mpsc::Receiver<Signal>>>) -> Self {
         let handle = thread::spawn(move || {
             loop {
-                println!("\tloop[worker[{id:?}]]");
                 let signal = {
+                    // We put the mutex lock in this block so it is dropped immediately after.
                     let receiver = receiver.lock().unwrap();
-                    println!("[worker][{id:?}] about to block via recv");
                     receiver.recv().unwrap()
                 };
                 match signal {
-                    Signal::Job(task) => {
-                        println!("[worker][{id:?}] got task");
-                        task();
-                    }
+                    Signal::Job(task) => task(),
                     Signal::Pause(pauser) => {
-                        println!("[worker][{id:?}] got pause signal");
                         pauser.send_ack();
                         pauser.wait_for_unpause();
                     }
-                    _ => {
-                        println!("[worker][{id:?}] signalled to terminate -> exiting");
-                        break;
-                    }
+                    Signal::Terminate => break,
                 }
             }
         });

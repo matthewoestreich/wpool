@@ -20,11 +20,12 @@ impl WPool {
     pub fn new(max_workers: usize) -> Self {
         let (task_tx, task_rx) = mpsc::channel();
         let worker_channel = ThreadedSyncChannel::new(max_workers);
+        let dispatcher = Arc::new(Dispatcher::new(max_workers, worker_channel));
 
         Self {
             task_sender: Some(task_tx).into(),
             max_workers,
-            dispatcher: Dispatcher::spawn(max_workers, task_rx, worker_channel),
+            dispatcher: dispatcher.spawn(task_rx),
             is_stopped: AtomicBool::new(false),
             stop_once: Once::new(),
             pauser: Arc::new(Pauser::new()),
@@ -42,7 +43,6 @@ impl WPool {
         F: FnOnce() + Send + 'static,
     {
         if self.is_stopped.load(Ordering::Relaxed) {
-            println!("submit(f) -> tried to submit to a stopped pool!");
             return;
         }
         self.submit_signal(Signal::Job(Box::new(f)));
@@ -84,26 +84,20 @@ impl WPool {
 
     // Return an 'unpause' function.
     pub fn pause(&self) {
-        println!("[wpool][pause] starting");
         if self.is_stopped.load(Ordering::Relaxed) || self.is_paused.load(Ordering::Relaxed) {
             return;
         }
-
         let pauser = Arc::clone(&self.pauser);
-
         // Submit pause signal to dispatcher for every possible worker.
         for _ in 0..self.max_workers {
             self.submit_signal(Signal::Pause(Arc::clone(&pauser)));
         }
         // Wait for all workers to acknowledge pause. This will block until all
         // workers are paused, giving them time to finish any current work.
-        for i in 0..self.max_workers {
-            println!("\n\n\n[wpool][worker:{i}] has said it is paused\n\n\n");
+        for _ in 0..self.max_workers {
             pauser.wait_for_ack();
         }
-
         self.is_paused.store(true, Ordering::Relaxed);
-        println!("[wpool][pause] DONE! all workers paused");
     }
 
     // Unpauses a paused pool by sending an 'unpause' message through a channel to each worker.
@@ -123,16 +117,16 @@ impl WPool {
             self.is_stopped.store(true, Ordering::Relaxed);
             self.dispatcher.is_waiting.store(wait, Ordering::Relaxed);
 
-            println!("[shutdown] closing task_queue");
+            // Close the task queue/channel
             if let Some(task_queue) = self.task_sender.lock().unwrap().take() {
                 drop(task_queue);
             }
 
-            // Join dispatcher thread. Blocks until dispatcher thread has ended.
+            // Block until dispatcher thread has ended.
             self.dispatcher.join();
 
             let mut workers = self.dispatcher.workers.lock().unwrap();
-            println!("[shutdown] sending terminate signal to all workers");
+
             for _ in 0..workers.len() {
                 let _ = self
                     .dispatcher
@@ -141,12 +135,9 @@ impl WPool {
                     .send(Signal::Terminate);
             }
 
-            println!("[shutdown] joining worker threads");
             for mut w in workers.drain(..) {
                 w.join();
             }
-
-            println!("[shutdown] done.");
         });
     }
 }
@@ -184,7 +175,6 @@ mod tests {
         assert_eq!(counter.load(Ordering::Relaxed), num_jobs);
     }
 
-    /*
     #[test]
     fn test_stop_basic() {
         let max_workers = 3;
@@ -212,7 +202,6 @@ mod tests {
             max_workers + range_buffer
         );
     }
-    */
 
     #[test]
     fn test_pause_basic() {

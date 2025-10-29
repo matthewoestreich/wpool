@@ -26,7 +26,7 @@ impl<T> ThreadedChannel<T> {
         let (sender, rx) = mpsc::channel();
         Self {
             sender,
-            receiver: Arc::new(Mutex::new(rx)),
+            receiver: Mutex::new(rx).into(),
         }
     }
 }
