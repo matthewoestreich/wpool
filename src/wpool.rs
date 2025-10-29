@@ -73,7 +73,7 @@ impl WPool {
             self.is_stopped.store(true, Ordering::Relaxed);
             self.dispatcher.is_wait.store(wait, Ordering::Relaxed);
 
-            println!("shutdown() -> closing task_queue");
+            println!("[shutdown] closing task_queue");
             if let Some(task_queue) = self.task_sender.take() {
                 drop(task_queue);
             }
@@ -82,9 +82,7 @@ impl WPool {
             self.dispatcher.join();
 
             let mut workers = self.dispatcher.workers.lock().unwrap();
-            println!(
-                "shutdown() -> sending terminate signal to all workers -> workers='{workers:?}'"
-            );
+            println!("[shutdown] sending terminate signal to all workers");
             for _ in 0..workers.len() {
                 let _ = self
                     .dispatcher
@@ -93,12 +91,12 @@ impl WPool {
                     .send(Signal::Terminate);
             }
 
-            println!("shutdown() -> joining worker threads");
+            println!("[shutdown] joining worker threads");
             for mut w in workers.drain(..) {
                 w.join();
             }
 
-            println!("shutdown() -> done.");
+            println!("[shutdown] done.");
         });
     }
 }
