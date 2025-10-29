@@ -10,7 +10,6 @@ pub struct WPool {
     dispatcher: Arc<Dispatcher>,
     max_workers: usize,
     is_stopped: AtomicBool,
-    is_waiting: AtomicBool,
     stop_once: Once,
     task_sender: Option<mpsc::Sender<Signal>>,
 }
@@ -30,7 +29,6 @@ impl WPool {
             max_workers,
             dispatcher: Dispatcher::spawn(max_workers, task_rx, worker_channel),
             is_stopped: AtomicBool::new(false),
-            is_waiting: AtomicBool::new(false),
             stop_once: Once::new(),
         }
     }
@@ -73,14 +71,14 @@ impl WPool {
     fn shutdown(&mut self, wait: bool) {
         self.stop_once.call_once(|| {
             self.is_stopped.store(true, Ordering::Relaxed);
-            self.is_waiting.store(wait, Ordering::Relaxed);
+            self.dispatcher.is_wait.store(wait, Ordering::Relaxed);
 
             println!("shutdown() -> closing task_queue");
             if let Some(task_queue) = self.task_sender.take() {
                 drop(task_queue);
             }
 
-            // Join dispatcher thread
+            // Join dispatcher thread. Blocks until dispatcher thread has ended.
             self.dispatcher.join();
 
             let mut workers = self.dispatcher.workers.lock().unwrap();
@@ -94,6 +92,7 @@ impl WPool {
                     .sender
                     .send(Signal::Terminate);
             }
+
             println!("shutdown() -> joining worker threads");
             for mut w in workers.drain(..) {
                 w.join();

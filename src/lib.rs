@@ -35,7 +35,7 @@ mod tests {
     #[test]
     fn test_new() {
         let max_workers = 3;
-        let num_jobs = max_workers;
+        let num_jobs = max_workers * max_workers;
         let counter = Arc::new(AtomicUsize::new(0));
 
         let mut p = WPool::new(max_workers);
