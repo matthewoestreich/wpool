@@ -64,16 +64,31 @@ impl Worker {
 struct Dispatcher {
     handle: Mutex<Option<thread::JoinHandle<()>>>,
     max_workers: usize,
-    task_reciever: Arc<Mutex<mpsc::Receiver<Signal>>>,
+    task_receiver: Arc<Mutex<mpsc::Receiver<Signal>>>,
     worker_channel: ThreadedSyncChannel<Signal>,
     workers: Mutex<Vec<Worker>>,
     waiting_queue: Mutex<VecDeque<Task>>,
 }
 
 impl Dispatcher {
-    fn spawn(self: &Arc<Self>) {
+    fn new(
+        max_workers: usize,
+        task_receiver: Arc<Mutex<mpsc::Receiver<Signal>>>,
+        worker_channel: ThreadedSyncChannel<Signal>,
+    ) -> Self {
+        Self {
+            handle: None.into(),
+            max_workers,
+            task_receiver,
+            worker_channel,
+            workers: Vec::new().into(),
+            waiting_queue: VecDeque::new().into(),
+        }
+    }
+
+    fn start(self: &Arc<Self>) {
         let this = Arc::clone(self);
-        let task_rx = Arc::clone(&this.task_reciever);
+        let task_rx = Arc::clone(&this.task_receiver);
         let worker_rx = Arc::clone(&this.worker_channel.receiver);
 
         *self.handle.lock().unwrap() = Some(thread::spawn(move || {
@@ -166,32 +181,27 @@ pub struct WPool {
 impl WPool {
     pub fn new(max_workers: usize) -> Self {
         let (task_tx, task_rx) = mpsc::channel();
-
         let (worker_tx, worker_rx) = mpsc::sync_channel::<Signal>(max_workers);
+
         let worker_channel = ThreadedSyncChannel {
             sender: worker_tx,
             receiver: Arc::new(Mutex::new(worker_rx)),
         };
 
-        let dispatcher = Arc::new(Dispatcher {
-            handle: None.into(),
-            max_workers,
-            task_reciever: Arc::new(Mutex::new(task_rx)),
-            worker_channel,
-            workers: Vec::new().into(),
-            waiting_queue: VecDeque::new().into(),
-        });
-
         let this = Self {
             task_queue: Some(task_tx),
             max_workers,
-            dispatcher,
+            dispatcher: Arc::new(Dispatcher::new(
+                max_workers,
+                Arc::new(Mutex::new(task_rx)),
+                worker_channel,
+            )),
             is_stopped: AtomicBool::new(false),
             is_waiting: AtomicBool::new(false),
             stop_once: Once::new(),
         };
 
-        this.dispatcher.spawn();
+        this.dispatcher.start();
         this
     }
 
