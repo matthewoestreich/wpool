@@ -33,7 +33,7 @@ mod tests {
     use crate::wpool::WPool;
 
     #[test]
-    fn test_new() {
+    fn test_stop_wait_basic() {
         let max_workers = 3;
         let num_jobs = max_workers * max_workers;
         let counter = Arc::new(AtomicUsize::new(0));
@@ -52,7 +52,6 @@ mod tests {
         assert_eq!(counter.load(Ordering::Relaxed), num_jobs);
     }
 
-    /*
     #[test]
     fn test_job_actually_ran() {
         let mut p = WPool::new(3);
@@ -70,7 +69,7 @@ mod tests {
     #[test]
     fn test_long_running_job_continues_after_stop_wait() {
         let max_workers = 3;
-        let long_running_task_sleep_for = Duration::from_secs(1);
+        let long_running_task_sleep_for = Duration::from_secs(3);
         let default_task_sleep_for = Duration::from_micros(1);
         let counter = Arc::new(AtomicUsize::new(0));
 
@@ -102,7 +101,7 @@ mod tests {
     #[test]
     fn test_large_amount_of_jobs() {
         let max_workers = 16;
-        let num_jobs = 16000;
+        let num_jobs = 1_000_000;
         let counter = Arc::new(AtomicUsize::new(0));
 
         let mut p = WPool::new(max_workers);
@@ -204,5 +203,4 @@ mod tests {
         p.stop_wait();
         // No need to assert anything, if this panics the test will fail.
     }
-    */
 }
