@@ -5,7 +5,7 @@ Concurrency-limiting worker pool.
 ```rust
 // Create pool
 let max_workers = 10;
-let mut pool = WPool::new(max_workers);
+let pool = WPool::new(max_workers);
 
 // Submit as many "jobs" as you'd like
 pool.submit(|| {

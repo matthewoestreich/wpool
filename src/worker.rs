@@ -3,7 +3,7 @@ use std::{
     thread,
 };
 
-use crate::Signal;
+use crate::signal::Signal;
 
 #[derive(Debug)]
 pub(crate) struct Worker {
@@ -14,18 +14,24 @@ impl Worker {
     pub(crate) fn spawn(receiver: Arc<Mutex<mpsc::Receiver<Signal>>>, id: Option<usize>) -> Self {
         let handle = thread::spawn(move || {
             loop {
-                println!("~w_{id:?}~");
+                println!("\tloop[worker[{id:?}]]");
                 let signal = {
                     let receiver = receiver.lock().unwrap();
+                    println!("[worker][{id:?}] about to block via recv");
                     receiver.recv().unwrap()
                 };
                 match signal {
                     Signal::Job(task) => {
-                        println!("worker() -> id={id:?} -> got task");
+                        println!("[worker][{id:?}] got task");
                         task();
                     }
+                    Signal::Pause(pauser) => {
+                        println!("[worker][{id:?}] got pause signal");
+                        pauser.send_ack();
+                        pauser.wait_for_unpause();
+                    }
                     _ => {
-                        println!("worker() -> id={id:?} -> signalled to terminate -> exiting");
+                        println!("[worker][{id:?}] signalled to terminate -> exiting");
                         break;
                     }
                 }
