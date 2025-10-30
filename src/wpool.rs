@@ -101,6 +101,7 @@ impl WPool {
         for _ in 0..self.max_workers {
             self.submit_signal(Signal::Pause(Arc::clone(&pauser)));
         }
+        
         // Block until all workers are paused, giving them time to finish any current work.
         for _ in 0..self.max_workers {
             pauser.source.wait_for_ack();
@@ -146,6 +147,7 @@ impl WPool {
                     .sender
                     .send(Signal::Terminate);
             }
+
             // Block until all worker threads have ended.
             for mut w in workers.drain(..) {
                 w.join();
