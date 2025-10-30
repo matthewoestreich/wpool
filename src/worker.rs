@@ -12,7 +12,7 @@ pub(crate) struct Worker {
 
 impl Worker {
     pub(crate) fn spawn(receiver: Arc<Mutex<mpsc::Receiver<Signal>>>) -> Self {
-        let handle = thread::spawn(move || {
+        let handle = Some(thread::spawn(move || {
             loop {
                 let signal = {
                     // We put the mutex lock in this block so it is dropped immediately after.
@@ -28,11 +28,9 @@ impl Worker {
                     Signal::Terminate => break,
                 }
             }
-        });
+        }));
 
-        Self {
-            handle: Some(handle),
-        }
+        Self { handle }
     }
 
     pub(crate) fn join(&mut self) {
