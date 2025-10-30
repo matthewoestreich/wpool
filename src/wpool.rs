@@ -131,6 +131,7 @@ impl WPool {
 
             let mut workers = self.dispatcher.workers.lock().unwrap();
 
+            // Kill all worker threads.
             for _ in 0..workers.len() {
                 let _ = self
                     .dispatcher
