@@ -3,33 +3,33 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, RecvError, TryRecvError, TrySendError},
+        mpsc::{self, RecvError, TryRecvError},
     },
     thread,
 };
 
-use crate::{channel::ThreadedSyncChannel, signal::Signal, worker::Worker};
+use crate::{channel::ThreadedChannel, signal::Signal, worker::Worker};
 
 pub(crate) struct Dispatcher {
-    pub(crate) handle: Mutex<Option<thread::JoinHandle<()>>>,
-    pub(crate) max_workers: usize,
-    pub(crate) worker_channel: ThreadedSyncChannel<Signal>,
-    pub(crate) workers: Mutex<Vec<Worker>>,
-    pub(crate) waiting_queue: Mutex<VecDeque<Signal>>,
-    pub(crate) is_waiting: AtomicBool,
     has_spawned: AtomicBool,
+    pub(crate) handle: Mutex<Option<thread::JoinHandle<()>>>,
+    pub(crate) is_waiting: AtomicBool,
+    pub(crate) max_workers: usize,
+    pub(crate) waiting_queue: Mutex<VecDeque<Signal>>,
+    pub(crate) worker_channel: ThreadedChannel<Signal>,
+    pub(crate) workers: Mutex<Vec<Worker>>,
 }
 
 impl Dispatcher {
-    pub(crate) fn new(max_workers: usize, worker_channel: ThreadedSyncChannel<Signal>) -> Self {
+    pub(crate) fn new(max_workers: usize, worker_channel: ThreadedChannel<Signal>) -> Self {
         Self {
+            has_spawned: AtomicBool::new(false),
             handle: None.into(),
+            is_waiting: AtomicBool::new(false),
             max_workers,
+            waiting_queue: VecDeque::new().into(),
             worker_channel,
             workers: Vec::new().into(),
-            waiting_queue: VecDeque::new().into(),
-            is_waiting: AtomicBool::new(false),
-            has_spawned: AtomicBool::new(false),
         }
     }
 
@@ -43,9 +43,9 @@ impl Dispatcher {
 
         *self.handle.lock().unwrap() = Some(thread::spawn(move || {
             loop {
-                // As long as the waiting queue isn't empty, incoming signals (on task channel) 
+                // As long as the waiting queue isn't empty, incoming signals (on task channel)
                 // are put into the waiting queue and signals to run are taken from the waiting
-                // queue. Once the waiting queue is empty, then go back to submitting incoming 
+                // queue. Once the waiting queue is empty, then go back to submitting incoming
                 // signals directly to available workers.
                 if !this.waiting_queue.lock().unwrap().is_empty() {
                     if !this.process_waiting_queue(&task_receiver) {
@@ -60,18 +60,16 @@ impl Dispatcher {
                     Err(RecvError) => break,
                 };
 
-                // Non-blocking. If worker channel is full, push the signal to waiting_queue.
-                match this.worker_channel.sender.try_send(signal) {
-                    Ok(_) => {
-                        let mut workers = this.workers.lock().unwrap();
-                        if workers.len() < this.max_workers {
-                            workers.push(Worker::spawn(Arc::clone(&worker_channel_receiver)));
-                        }
+                // Got a signal.
+                let mut workers = this.workers.lock().unwrap();
+                if workers.len() < this.max_workers {
+                    workers.push(Worker::spawn(Arc::clone(&worker_channel_receiver)));
+                    // Non-blocking. Send signal to workers channel, break if worker channel is closed.
+                    if this.worker_channel.sender.send(signal).is_err() {
+                        break;
                     }
-                    Err(TrySendError::Full(signal)) => {
-                        this.waiting_queue.lock().unwrap().push_back(signal);
-                    }
-                    Err(TrySendError::Disconnected(_)) => break,
+                } else {
+                    this.waiting_queue.lock().unwrap().push_back(signal);
                 }
             }
 

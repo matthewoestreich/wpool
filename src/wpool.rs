@@ -4,32 +4,37 @@ use std::sync::{
     mpsc::{self},
 };
 
-use crate::{channel::ThreadedSyncChannel, dispatcher::Dispatcher, pauser::Pauser, signal::Signal};
+use crate::{
+    channel::{Channel, ThreadedChannel},
+    dispatcher::Dispatcher,
+    pauser::Pauser,
+    signal::Signal,
+};
 
 pub struct WPool {
     pub(crate) dispatcher: Arc<Dispatcher>,
-    max_workers: usize,
+    is_paused: AtomicBool,
     is_stopped: AtomicBool,
+    max_workers: usize,
+    pauser: Arc<Pauser>,
     stop_once: Once,
     task_sender: Mutex<Option<mpsc::Sender<Signal>>>,
-    pauser: Arc<Pauser>,
-    is_paused: AtomicBool,
 }
 
 impl WPool {
     pub fn new(max_workers: usize) -> Self {
-        let (task_channel_sender, task_channel_receiver) = mpsc::channel();
-        let worker_channel = ThreadedSyncChannel::new(max_workers);
+        let task_channel = Channel::new();
+        let worker_channel = ThreadedChannel::new();
         let dispatcher = Arc::new(Dispatcher::new(max_workers, worker_channel));
 
         Self {
-            task_sender: Some(task_channel_sender).into(),
-            max_workers,
-            dispatcher: dispatcher.spawn(task_channel_receiver),
-            is_stopped: AtomicBool::new(false),
-            stop_once: Once::new(),
-            pauser: Arc::new(Pauser::new()),
+            dispatcher: dispatcher.spawn(task_channel.receiver),
             is_paused: AtomicBool::new(false),
+            is_stopped: AtomicBool::new(false),
+            max_workers,
+            pauser: Arc::new(Pauser::new()),
+            stop_once: Once::new(),
+            task_sender: Some(task_channel.sender).into(),
         }
     }
 
