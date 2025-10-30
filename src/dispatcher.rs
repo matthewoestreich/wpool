@@ -47,12 +47,16 @@ impl Dispatcher {
                 // are put into the waiting queue and signals to run are taken from the waiting
                 // queue. Once the waiting queue is empty, then go back to submitting incoming
                 // signals directly to available workers.
-                if !this.waiting_queue.lock().unwrap().is_empty() {
-                    if !this.process_waiting_queue(&task_receiver) {
+                let mut waiting_queue = this.waiting_queue.lock().unwrap();
+                if !waiting_queue.is_empty() {
+                    if !this.process_waiting_queue(&mut waiting_queue, &task_receiver) {
                         break;
                     }
                     continue;
                 }
+
+                // Drop the lock so we don't deadlock or hold it unnecessarily.
+                drop(waiting_queue);
 
                 // Blocks until we get a task or the task channel is closed.
                 let signal = match task_receiver.recv() {
@@ -87,8 +91,11 @@ impl Dispatcher {
         }
     }
 
-    fn process_waiting_queue(&self, task_receiver: &mpsc::Receiver<Signal>) -> bool {
-        let mut waiting_queue = self.waiting_queue.lock().unwrap();
+    fn process_waiting_queue(
+        &self,
+        waiting_queue: &mut VecDeque<Signal>,
+        task_receiver: &mpsc::Receiver<Signal>,
+    ) -> bool {
         match task_receiver.try_recv() {
             Ok(signal) => waiting_queue.push_back(signal),
             Err(TryRecvError::Disconnected) => return false,
