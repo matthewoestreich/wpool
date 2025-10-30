@@ -1,4 +1,4 @@
-use crate::channel::ThreadedChannel;
+use crate::{channel::ThreadedChannel, lock_safe};
 
 // Pauser is a 'quality-of-life' wrapper to help make it
 // easier to send a pause signal to workers.
@@ -31,13 +31,13 @@ impl Pauser {
     // and then 'wait_for_unpause', effectivey putting the worker in a paused,
     // blocking state.
     pub(crate) fn wait_for_unpause(&self) {
-        let _ = crate::lock_safe(&self.unpause_channel.receiver).recv();
+        let _ = lock_safe(&self.unpause_channel.receiver).recv();
     }
 
     // The thread that needs acknowledgement would call this.
     // It blocks until acknowledgement.
     pub(crate) fn wait_for_ack(&self) {
-        let _ = crate::lock_safe(&self.ack_channel.receiver).recv();
+        let _ = lock_safe(&self.ack_channel.receiver).recv();
     }
 
     // Unpauses a worker by sending a message to the unpause channel.

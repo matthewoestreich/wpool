@@ -6,7 +6,7 @@ use std::{
     thread,
 };
 
-use crate::signal::Signal;
+use crate::{lock_safe, signal::Signal};
 
 #[derive(Debug)]
 pub(crate) struct Worker {
@@ -18,7 +18,7 @@ impl Worker {
         let handle = Some(thread::spawn(move || {
             loop {
                 // Blocks until we either receive a signal or channel is closed.
-                let signal = match crate::lock_safe(&receiver).recv() {
+                let signal = match lock_safe(&receiver).recv() {
                     Ok(signal) => signal,
                     Err(_) => break,
                 };

@@ -7,6 +7,7 @@ use std::sync::{
 use crate::{
     channel::{Channel, ThreadedChannel},
     dispatcher::Dispatcher,
+    lock_safe,
     pauser::Pauser,
     signal::Signal,
 };
@@ -79,7 +80,7 @@ impl WPool {
         if self.is_stopped.load(Ordering::Relaxed) {
             return;
         }
-        if let Some(tx) = crate::lock_safe(&self.task_sender).as_ref() {
+        if let Some(tx) = lock_safe(&self.task_sender).as_ref() {
             let _ = tx.send(signal);
         }
     }
@@ -128,14 +129,14 @@ impl WPool {
             self.dispatcher.is_waiting.store(wait, Ordering::Relaxed);
 
             // Close the task channel by dropping sender.
-            if let Some(task_sender) = crate::lock_safe(&self.task_sender).take() {
+            if let Some(task_sender) = lock_safe(&self.task_sender).take() {
                 drop(task_sender);
             }
 
             // Block until dispatcher thread has ended.
             self.dispatcher.join();
 
-            let mut workers = crate::lock_safe(&self.dispatcher.workers);
+            let mut workers = lock_safe(&self.dispatcher.workers);
 
             // Kill all worker threads.
             for _ in 0..workers.len() {
