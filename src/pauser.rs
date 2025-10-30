@@ -15,11 +15,11 @@ impl PauserDestination {
         }
     }
 
-    pub(crate) fn send_ack(&self) {
+    pub(crate) fn send_ack_to_source(&self) {
         let _ = self.ack_channel.sender.send(());
     }
 
-    pub(crate) fn wait_for_resume(&self) {
+    pub(crate) fn wait_for_resume_from_source(&self) {
         let _ = lock_safe(&self.unpause_channel.receiver).recv();
     }
 }
@@ -39,11 +39,11 @@ impl PauserSource {
         }
     }
 
-    pub(crate) fn wait_for_ack(&self) {
+    pub(crate) fn wait_for_ack_from_destination(&self) {
         let _ = lock_safe(&self.ack_channel.receiver).recv();
     }
 
-    pub(crate) fn send_resume(&self) {
+    pub(crate) fn send_resume_to_destination(&self) {
         let _ = self.unpause_channel.sender.send(());
     }
 }
