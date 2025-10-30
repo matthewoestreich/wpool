@@ -26,7 +26,7 @@ impl Worker {
                 match signal {
                     Signal::Task(task_fn) => task_fn(),
                     // Let them know we are paused and block until we are resumed.
-                    Signal::Pause(pauser) => pauser.send_ack_and_recv_resume(),
+                    Signal::Pause(pauser) => pauser.pause_this_thread(),
                     Signal::Terminate => break,
                 }
             }

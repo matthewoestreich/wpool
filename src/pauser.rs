@@ -41,7 +41,7 @@ impl Pauser {
     // Call from non-controller thread, like a worker thread.
     // Lets the controller thread know we are paused and then
     // blocks until controller thread sends the resume message.
-    pub(crate) fn send_ack_and_recv_resume(&self) {
+    pub(crate) fn pause_this_thread(&self) {
         let _ = self.ack_chan.sender.send(());
         let _ = lock_safe(&self.pause_chan.receiver).recv();
     }
