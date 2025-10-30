@@ -101,8 +101,8 @@ impl WPool {
         for _ in 0..self.max_workers {
             self.submit_signal(Signal::Pause(Arc::clone(&pauser)));
         }
-        
-        // Block until all workers are paused, giving them time to finish any current work.
+
+        // Blocks until all workers tell us they're paused.
         for _ in 0..self.max_workers {
             pauser.source.wait_for_ack();
         }
