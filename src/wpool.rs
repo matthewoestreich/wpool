@@ -33,7 +33,7 @@ impl WPool {
             is_paused: AtomicBool::new(false),
             is_stopped: AtomicBool::new(false),
             max_workers,
-            pauser: Arc::new(Pauser::new()),
+            pauser: Pauser::new(),
             stop_once: Once::new(),
             task_sender: Some(task_channel.sender).into(),
         }
@@ -49,7 +49,7 @@ impl WPool {
     where
         F: FnOnce() + Send + 'static,
     {
-        self.submit_signal(Signal::Job(Box::new(f)));
+        self.submit_signal(Signal::Task(Box::new(f)));
     }
 
     // Enqueues the given function and waits for it to be executed.
@@ -57,12 +57,12 @@ impl WPool {
     where
         F: FnOnce() + Send + 'static,
     {
-        let (done_tx, done_rx) = mpsc::channel::<()>();
+        let (sender, receiver) = mpsc::channel::<()>();
         self.submit(move || {
             f();
-            let _ = done_tx.send(());
+            let _ = sender.send(());
         });
-        let _ = done_rx.recv(); // blocks until complete
+        let _ = receiver.recv(); // blocks until complete
     }
 
     // Stop and wait for all current work to complete, as well as all signals in the dispatchers waiting_queue.
@@ -104,7 +104,7 @@ impl WPool {
 
         // Blocks until all workers tell us they're paused.
         for _ in 0..self.max_workers {
-            pauser.source.wait_for_ack_from_destination();
+            pauser.recv_ack();
         }
 
         self.is_paused.store(true, Ordering::Relaxed);
@@ -118,7 +118,7 @@ impl WPool {
         }
 
         for _ in 0..self.max_workers {
-            self.pauser.source.send_resume_to_destination();
+            self.pauser.send_resume();
         }
 
         self.is_paused.store(false, Ordering::Relaxed);
