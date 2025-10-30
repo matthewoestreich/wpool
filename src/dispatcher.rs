@@ -43,6 +43,10 @@ impl Dispatcher {
 
         *self.handle.lock().unwrap() = Some(thread::spawn(move || {
             loop {
+                // As long as the waiting queue isn't empty, incoming signals (on task channel) 
+                // are put into the waiting queue and signals to run are taken from the waiting
+                // queue. Once the waiting queue is empty, then go back to submitting incoming 
+                // signals directly to available workers.
                 if !this.waiting_queue.lock().unwrap().is_empty() {
                     if !this.process_waiting_queue(&task_receiver) {
                         break;
@@ -56,6 +60,7 @@ impl Dispatcher {
                     Err(RecvError) => break,
                 };
 
+                // Non-blocking. If worker channel is full, push the signal to waiting_queue.
                 match this.worker_channel.sender.try_send(signal) {
                     Ok(_) => {
                         let mut workers = this.workers.lock().unwrap();

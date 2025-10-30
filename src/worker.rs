@@ -17,12 +17,14 @@ impl Worker {
                 let signal = {
                     // We put the mutex lock in this block so it is dropped immediately after.
                     let receiver = receiver.lock().unwrap();
+                    // Blocks until we receive something on worker channel.
                     receiver.recv().unwrap()
                 };
                 match signal {
                     Signal::Job(task) => task(),
                     Signal::Pause(pauser) => {
                         pauser.send_ack();
+                        // Blocks until the pauser unpauses us.
                         pauser.wait_for_unpause();
                     }
                     Signal::Terminate => break,
