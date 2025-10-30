@@ -18,14 +18,14 @@ pub struct WPool {
 
 impl WPool {
     pub fn new(max_workers: usize) -> Self {
-        let (task_tx, task_rx) = mpsc::channel();
+        let (task_channel_sender, task_channel_receiver) = mpsc::channel();
         let worker_channel = ThreadedSyncChannel::new(max_workers);
         let dispatcher = Arc::new(Dispatcher::new(max_workers, worker_channel));
 
         Self {
-            task_sender: Some(task_tx).into(),
+            task_sender: Some(task_channel_sender).into(),
             max_workers,
-            dispatcher: dispatcher.spawn(task_rx),
+            dispatcher: dispatcher.spawn(task_channel_receiver),
             is_stopped: AtomicBool::new(false),
             stop_once: Once::new(),
             pauser: Arc::new(Pauser::new()),
@@ -42,9 +42,6 @@ impl WPool {
     where
         F: FnOnce() + Send + 'static,
     {
-        if self.is_stopped.load(Ordering::Relaxed) {
-            return;
-        }
         self.submit_signal(Signal::Job(Box::new(f)));
     }
 
@@ -61,18 +58,17 @@ impl WPool {
         done_rx.recv().unwrap(); // blocks until complete
     }
 
-    // Stop and wait for all current + waiting_queue signals.
+    // Stop and wait for all current + signals in the dispatchers waiting_queue.
     pub fn stop_wait(&self) {
         self.shutdown(true);
     }
 
-    // Like issuing a "stop-now" command.
-    // Stop lets all current work finish but disregards waiting signals.
+    // Stop lets all current work finish but disregards signals in the dispatchers waiting_queue.
     pub fn stop(&self) {
         self.shutdown(false);
     }
 
-    // Quality-of-life private function, easier to submit signals directly to the dispatcher.
+    // "Quality-of-life" function, easier to submit signals directly to the dispatcher.
     fn submit_signal(&self, signal: Signal) {
         if self.is_stopped.load(Ordering::Relaxed) {
             return;
@@ -82,18 +78,25 @@ impl WPool {
         }
     }
 
-    // Return an 'unpause' function.
+    // Pause all possible workers.
+    //
+    // - If current worker count is less than max workers, workers will be spawned,
+    //   up to 'max_workers' amount, and immediately paused. This ensures every
+    //   possible worker that could exist in 'this' pool is paused.
+    //
+    // - Paused workers are unable to accept new signals.
+    //
+    // - To unpause, you must explicitly call `.resume()` on your pool instance.
+    //
     pub fn pause(&self) {
         if self.is_stopped.load(Ordering::Relaxed) || self.is_paused.load(Ordering::Relaxed) {
             return;
         }
         let pauser = Arc::clone(&self.pauser);
-        // Submit pause signal to dispatcher for every possible worker.
         for _ in 0..self.max_workers {
             self.submit_signal(Signal::Pause(Arc::clone(&pauser)));
         }
-        // Wait for all workers to acknowledge pause. This will block until all
-        // workers are paused, giving them time to finish any current work.
+        // Block until all workers are paused, giving them time to finish any current work.
         for _ in 0..self.max_workers {
             pauser.wait_for_ack();
         }
