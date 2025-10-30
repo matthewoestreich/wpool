@@ -25,39 +25,39 @@ use crate::{channel::ThreadedChannel, lock_safe};
 //
 #[derive(Clone)]
 pub(crate) struct Pauser {
-    ack_channel: ThreadedChannel<()>,
-    unpause_channel: ThreadedChannel<()>,
+    ack_chan: ThreadedChannel<()>,
+    pause_chan: ThreadedChannel<()>,
 }
 
 impl Pauser {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
-            ack_channel: ThreadedChannel::new(),
-            unpause_channel: ThreadedChannel::new(),
+            ack_chan: ThreadedChannel::new(),
+            pause_chan: ThreadedChannel::new(),
         })
     }
 
     // Call from non-controller thread, like a worker thread.
     // Lets the controller thread know we are paused.
     pub(crate) fn send_ack(&self) {
-        let _ = self.ack_channel.sender.send(());
+        let _ = self.ack_chan.sender.send(());
     }
 
     // Call from non-controller thread, like a worker thread.
     // Blocks until controller thread sends the resume message.
     pub(crate) fn recv_resume(&self) {
-        let _ = lock_safe(&self.unpause_channel.receiver).recv();
+        let _ = lock_safe(&self.pause_chan.receiver).recv();
     }
 
     // Call from controller thread.
     // Blocks until non-controller thread tells us they are paused.
     pub(crate) fn recv_ack(&self) {
-        let _ = lock_safe(&self.ack_channel.receiver).recv();
+        let _ = lock_safe(&self.ack_chan.receiver).recv();
     }
 
     // Call from controller thread.
     // Sends resume message to non-controller thread.
     pub(crate) fn send_resume(&self) {
-        let _ = self.unpause_channel.sender.send(());
+        let _ = self.pause_chan.sender.send(());
     }
 }
