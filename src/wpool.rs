@@ -58,7 +58,7 @@ impl WPool {
         done_rx.recv().unwrap(); // blocks until complete
     }
 
-    // Stop and wait for all current + signals in the dispatchers waiting_queue.
+    // Stop and wait for all current work to complete, as well as all signals in the dispatchers waiting_queue.
     pub fn stop_wait(&self) {
         self.shutdown(true);
     }
