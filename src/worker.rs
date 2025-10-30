@@ -1,5 +1,8 @@
 use std::{
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Mutex,
+        mpsc::{self},
+    },
     thread,
 };
 
@@ -14,18 +17,17 @@ impl Worker {
     pub(crate) fn spawn(receiver: Arc<Mutex<mpsc::Receiver<Signal>>>) -> Self {
         let handle = Some(thread::spawn(move || {
             loop {
-                let signal = {
-                    // We put the mutex lock in this block so it is dropped immediately after.
-                    let receiver = receiver.lock().unwrap();
-                    // Blocks until we receive something on worker channel.
-                    receiver.recv().unwrap()
+                // Blocks until we either receive a signal or channel is closed.
+                let signal = match crate::lock_safe(&receiver).recv() {
+                    Ok(signal) => signal,
+                    Err(_) => break,
                 };
+
                 match signal {
                     Signal::Job(task) => task(),
                     Signal::Pause(pauser) => {
-                        pauser.send_ack();
-                        // Blocks until the pauser unpauses us.
-                        pauser.wait_for_unpause();
+                        pauser.send_ack(); // Let them know we are paused.
+                        pauser.wait_for_unpause(); // Blocks until the pauser unpauses us.
                     }
                     Signal::Terminate => break,
                 }

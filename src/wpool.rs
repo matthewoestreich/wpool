@@ -38,7 +38,8 @@ impl WPool {
         }
     }
 
-    pub fn size(&self) -> usize {
+    // Returns total capacity of pool (eg. max workers)
+    pub fn capacity(&self) -> usize {
         self.max_workers
     }
 
@@ -60,7 +61,7 @@ impl WPool {
             f();
             let _ = done_tx.send(());
         });
-        done_rx.recv().unwrap(); // blocks until complete
+        let _ = done_rx.recv(); // blocks until complete
     }
 
     // Stop and wait for all current work to complete, as well as all signals in the dispatchers waiting_queue.
@@ -78,27 +79,24 @@ impl WPool {
         if self.is_stopped.load(Ordering::Relaxed) {
             return;
         }
-        if let Some(tx) = &self.task_sender.lock().unwrap().as_ref() {
+        if let Some(tx) = crate::lock_safe(&self.task_sender).as_ref() {
             let _ = tx.send(signal);
         }
     }
 
-    //
     // Pause all possible workers.
-    //
     // - If current worker count is less than max workers, workers will be spawned,
     //   up to 'max_workers' amount, and immediately paused. This ensures every
     //   possible worker that could exist in 'this' pool is paused.
-    //
     // - Paused workers are unable to accept new signals.
-    //
     // - To unpause, you must explicitly call `.resume()` on your pool instance.
-    //
     pub fn pause(&self) {
         if self.is_stopped.load(Ordering::Relaxed) || self.is_paused.load(Ordering::Relaxed) {
             return;
         }
+
         let pauser = Arc::clone(&self.pauser);
+
         for _ in 0..self.max_workers {
             self.submit_signal(Signal::Pause(Arc::clone(&pauser)));
         }
@@ -106,6 +104,7 @@ impl WPool {
         for _ in 0..self.max_workers {
             pauser.wait_for_ack();
         }
+
         self.is_paused.store(true, Ordering::Relaxed);
     }
 
@@ -115,9 +114,11 @@ impl WPool {
         if self.is_stopped.load(Ordering::Relaxed) || !self.is_paused.load(Ordering::Relaxed) {
             return;
         }
+
         for _ in 0..self.max_workers {
             self.pauser.unpause();
         }
+
         self.is_paused.store(false, Ordering::Relaxed);
     }
 
@@ -127,14 +128,14 @@ impl WPool {
             self.dispatcher.is_waiting.store(wait, Ordering::Relaxed);
 
             // Close the task channel by dropping sender.
-            if let Some(task_sender) = self.task_sender.lock().unwrap().take() {
+            if let Some(task_sender) = crate::lock_safe(&self.task_sender).take() {
                 drop(task_sender);
             }
 
             // Block until dispatcher thread has ended.
             self.dispatcher.join();
 
-            let mut workers = self.dispatcher.workers.lock().unwrap();
+            let mut workers = crate::lock_safe(&self.dispatcher.workers);
 
             // Kill all worker threads.
             for _ in 0..workers.len() {
@@ -144,7 +145,6 @@ impl WPool {
                     .sender
                     .send(Signal::Terminate);
             }
-
             // Block until all worker threads have ended.
             for mut w in workers.drain(..) {
                 w.join();
@@ -241,7 +241,7 @@ mod tests {
             })
         };
         // Wait for pause thread to finish
-        pause_handle.join().unwrap();
+        let _ = pause_handle.join();
         // Submit tasks while paused
         let paused_counter = Arc::new(AtomicUsize::new(0));
         for _ in 0..3 {

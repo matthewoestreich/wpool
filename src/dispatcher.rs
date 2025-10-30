@@ -41,21 +41,19 @@ impl Dispatcher {
         let worker_channel_receiver = Arc::clone(&self.worker_channel.receiver);
         let this = Arc::clone(&self);
 
-        *self.handle.lock().unwrap() = Some(thread::spawn(move || {
+        *crate::lock_safe(&self.handle) = Some(thread::spawn(move || {
             loop {
                 // As long as the waiting queue isn't empty, incoming signals (on task channel)
                 // are put into the waiting queue and signals to run are taken from the waiting
                 // queue. Once the waiting queue is empty, then go back to submitting incoming
                 // signals directly to available workers.
-                let mut waiting_queue = this.waiting_queue.lock().unwrap();
+                let mut waiting_queue = crate::lock_safe(&this.waiting_queue);
                 if !waiting_queue.is_empty() {
                     if !this.process_waiting_queue(&mut waiting_queue, &task_receiver) {
                         break;
                     }
                     continue;
                 }
-
-                // Drop the lock so we don't deadlock or hold it unnecessarily.
                 drop(waiting_queue);
 
                 // Blocks until we get a task or the task channel is closed.
@@ -65,7 +63,7 @@ impl Dispatcher {
                 };
 
                 // Got a signal.
-                let mut workers = this.workers.lock().unwrap();
+                let mut workers = crate::lock_safe(&this.workers);
                 if workers.len() < this.max_workers {
                     workers.push(Worker::spawn(Arc::clone(&worker_channel_receiver)));
                     // Non-blocking. Send signal to workers channel, break if worker channel is closed.
@@ -73,7 +71,8 @@ impl Dispatcher {
                         break;
                     }
                 } else {
-                    this.waiting_queue.lock().unwrap().push_back(signal);
+                    let mut waiting_queue = crate::lock_safe(&this.waiting_queue);
+                    waiting_queue.push_back(signal);
                 }
             }
 
@@ -86,8 +85,8 @@ impl Dispatcher {
     }
 
     pub(crate) fn join(&self) {
-        if let Some(handle) = self.handle.lock().unwrap().take() {
-            handle.join().unwrap();
+        if let Some(handle) = crate::lock_safe(&self.handle).take() {
+            let _ = handle.join();
         }
     }
 
@@ -109,7 +108,7 @@ impl Dispatcher {
     }
 
     fn run_queued_tasks(&self) {
-        let mut wq = self.waiting_queue.lock().unwrap();
+        let mut wq = crate::lock_safe(&self.waiting_queue);
         while !wq.is_empty() {
             if let Some(signal) = wq.pop_front() {
                 let _ = self.worker_channel.sender.send(signal);
