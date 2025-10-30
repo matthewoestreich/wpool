@@ -26,8 +26,8 @@ impl Worker {
                 match signal {
                     Signal::Job(task) => task(),
                     Signal::Pause(pauser) => {
-                        pauser.send_ack(); // Let them know we are paused.
-                        pauser.wait_for_unpause(); // Blocks until the pauser unpauses us.
+                        pauser.destination.send_ack(); // Let them know we are paused.
+                        pauser.destination.wait_for_resume(); // Blocks until the pauser.source unpauses us.
                     }
                     Signal::Terminate => break,
                 }

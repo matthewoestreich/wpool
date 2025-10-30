@@ -103,7 +103,7 @@ impl WPool {
         }
         // Block until all workers are paused, giving them time to finish any current work.
         for _ in 0..self.max_workers {
-            pauser.wait_for_ack();
+            pauser.source.wait_for_ack();
         }
 
         self.is_paused.store(true, Ordering::Relaxed);
@@ -117,7 +117,7 @@ impl WPool {
         }
 
         for _ in 0..self.max_workers {
-            self.pauser.unpause();
+            self.pauser.source.send_resume();
         }
 
         self.is_paused.store(false, Ordering::Relaxed);
