@@ -78,6 +78,7 @@ impl WPool {
         }
     }
 
+    //
     // Pause all possible workers.
     //
     // - If current worker count is less than max workers, workers will be spawned,
