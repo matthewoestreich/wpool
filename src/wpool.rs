@@ -336,11 +336,11 @@ mod tests {
             let _p = Arc::clone(&p);
             thread::spawn(move || {
                 println!("pausing from diff thread");
-                _p.pause_wait(); // <-- this is blocking, but on a new thread. Lets call this new thread "pause thread".
+                _p.pause_wait(); 
             })
         };
         // Wait for pause thread to finish
-        let _ = pause_handle.join(); // <-- this blocks until "pause thread" ends, but it should not end until we call p.resume(), so this should block forever..
+        let _ = pause_handle.join(); 
         println!("pause thread finished");
         // Submit tasks while paused
         let paused_counter = Arc::new(AtomicUsize::new(0));
