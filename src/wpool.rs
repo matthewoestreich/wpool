@@ -421,4 +421,13 @@ mod tests {
         p.stop_wait();
         // No need to assert anything, if this panics the test will fail.
     }
+
+    #[test]
+    fn test_multiple_stop() {
+        let p = WPool::new(3);
+        p.submit(|| {});
+        p.stop();
+        p.stop();
+        // No need to assert anything, if this panics the test will fail.
+    }
 }
