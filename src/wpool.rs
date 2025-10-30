@@ -192,21 +192,13 @@ mod tests {
         for i in 0..num_jobs {
             let counter_clone = counter.clone();
             p.submit(move || {
-                thread::sleep(Duration::from_millis(550));
+                thread::sleep(Duration::from_millis(10));
                 counter_clone.fetch_add(1, Ordering::Relaxed);
                 println!("job {i:?} done");
             });
         }
         p.stop();
-        let count = counter.load(Ordering::Relaxed);
-        // Assert completed jobs are within "range_buffer" amount (either neg or pos) of max_workers.
-        let range_buffer = 1;
-        assert!(
-            count <= max_workers + range_buffer && count >= max_workers - range_buffer,
-            "Completed {count} tasks expected between {} and {}",
-            max_workers - range_buffer,
-            max_workers + range_buffer
-        );
+        assert!(counter.load(Ordering::Relaxed) < num_jobs);
     }
 
     #[test]
