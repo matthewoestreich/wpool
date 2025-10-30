@@ -139,6 +139,7 @@ impl WPool {
                     .send(Signal::Terminate);
             }
 
+            // Block until all worker threads have ended.
             for mut w in workers.drain(..) {
                 w.join();
             }
