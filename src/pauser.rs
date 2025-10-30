@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::{channel::ThreadedChannel, lock_safe};
 
+//
 // Pauser is a 'quality-of-life' wrapper to simplify thread sync between
 // a controller thread and one (or many) non-controller (worker) threads.
 // It is meant to be a thread-safe shared struct.
@@ -38,14 +39,10 @@ impl Pauser {
     }
 
     // Call from non-controller thread, like a worker thread.
-    // Lets the controller thread know we are paused.
-    pub(crate) fn send_ack(&self) {
+    // Lets the controller thread know we are paused and then
+    // blocks until controller thread sends the resume message.
+    pub(crate) fn send_ack_and_recv_resume(&self) {
         let _ = self.ack_chan.sender.send(());
-    }
-
-    // Call from non-controller thread, like a worker thread.
-    // Blocks until controller thread sends the resume message.
-    pub(crate) fn recv_resume(&self) {
         let _ = lock_safe(&self.pause_chan.receiver).recv();
     }
 
