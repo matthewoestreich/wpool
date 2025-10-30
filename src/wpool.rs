@@ -121,9 +121,9 @@ impl WPool {
             self.is_stopped.store(true, Ordering::Relaxed);
             self.dispatcher.is_waiting.store(wait, Ordering::Relaxed);
 
-            // Close the task queue/channel
-            if let Some(task_queue) = self.task_sender.lock().unwrap().take() {
-                drop(task_queue);
+            // Close the task channel by dropping sender.
+            if let Some(task_sender) = self.task_sender.lock().unwrap().take() {
+                drop(task_sender);
             }
 
             // Block until dispatcher thread has ended.
