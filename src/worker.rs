@@ -1,12 +1,37 @@
 use std::{
     sync::{
         Arc, Mutex,
-        mpsc::{self},
+        atomic::{AtomicUsize, Ordering},
+        mpsc::{self, RecvTimeoutError},
     },
     thread,
+    time::Duration,
 };
 
 use crate::{lock_safe, signal::Signal};
+
+pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
+
+pub(crate) struct WorkerIDFactory {
+    next_id: AtomicUsize,
+}
+
+impl WorkerIDFactory {
+    pub(crate) fn new() -> Self {
+        Self {
+            next_id: AtomicUsize::new(0),
+        }
+    }
+
+    pub(crate) fn next(&self) -> usize {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum WorkerStatus {
+    Terminated(usize), // Terminated(worker_id)
+}
 
 #[derive(Debug)]
 pub(crate) struct Worker {
@@ -14,12 +39,27 @@ pub(crate) struct Worker {
 }
 
 impl Worker {
-    pub(crate) fn spawn(receiver: Arc<Mutex<mpsc::Receiver<Signal>>>) -> Self {
-        let handle = Some(thread::spawn(move || {
+    pub(crate) fn spawn(
+        id: usize,
+        worker_receiver: Arc<Mutex<mpsc::Receiver<Signal>>>,
+        worker_status_sender: mpsc::Sender<WorkerStatus>,
+    ) -> Self {
+        let mut this = Self { handle: None };
+
+        let status_sender = worker_status_sender.clone();
+
+        this.handle = Some(thread::spawn(move || {
             loop {
                 // Blocks until we either receive a signal or channel is closed.
-                let signal = match lock_safe(&receiver).recv() {
+                let signal = match lock_safe(&worker_receiver).recv_timeout(WORKER_IDLE_TIMEOUT) {
                     Ok(signal) => signal,
+                    Err(RecvTimeoutError::Timeout) => {
+                        let _ = status_sender.send(WorkerStatus::Terminated(id));
+                        println!(
+                            "worker {id} has not done anything in worker_idle_timeout, killing worker {id}"
+                        );
+                        break;
+                    }
                     Err(_) => break,
                 };
 
@@ -32,7 +72,7 @@ impl Worker {
             }
         }));
 
-        Self { handle }
+        this
     }
 
     pub(crate) fn join(&mut self) {
