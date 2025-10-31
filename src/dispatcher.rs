@@ -111,6 +111,7 @@ impl Dispatcher {
 
     fn process_waiting_queue(&self, task_receiver: &mpsc::Receiver<Signal>) -> bool {
         let mut waiting_queue = lock_safe(&self.waiting_queue);
+
         match task_receiver.try_recv() {
             Ok(signal) => waiting_queue.push_back(signal),
             Err(TryRecvError::Disconnected) => return false,
@@ -120,11 +121,13 @@ impl Dispatcher {
                 }
             }
         }
+
         return true;
     }
 
     fn run_queued_tasks(&self) {
         let mut wq = lock_safe(&self.waiting_queue);
+
         while !wq.is_empty() {
             if let Some(signal) = wq.pop_front() {
                 let _ = self.worker_channel.sender.send(signal);

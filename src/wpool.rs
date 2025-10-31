@@ -39,7 +39,6 @@ impl WPool {
         }
     }
 
-    // Returns total capacity of pool (eg. max workers)
     pub fn capacity(&self) -> usize {
         self.max_workers
     }
@@ -85,11 +84,9 @@ impl WPool {
         self.pause_pool(false);
     }
 
-    // Unpauses a paused pool by sending an 'unpause' message through a channel to each worker.
-    // You must explicitly call resume on a paused pool to unpause it.
+    // Resumes/unpauses all workers.
     pub fn resume(&self) {
         let mut is_paused = lock_safe(&self.paused);
-
         if self.is_stopped() || !*is_paused {
             return;
         }
@@ -156,12 +153,15 @@ impl WPool {
         self.stop_once.call_once(|| {
             // Unpause any paused workers. If we aren't paused, this is essentially a no-op.
             self.resume();
+
             // Acquire pause lock to wait for any pauses in progress to complete
             let pause_lock = lock_safe(&self.paused);
             self.set_stopped(true);
             drop(pause_lock);
+
             // Let dispatcher know if it should process it's waiting queue before exiting.
             self.dispatcher.set_is_waiting(wait);
+
             // Close the task channel.
             if let Some(task_sender) = lock_safe(&self.task_sender).take() {
                 drop(task_sender);
