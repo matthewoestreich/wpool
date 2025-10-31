@@ -106,17 +106,25 @@ impl WPool {
         self.stopped.store(is_stopped, Ordering::Relaxed);
     }
 
+    //
     // Pause all possible workers.
+    //
     // - If `wait` is true, we block until all workers acknowledge they're paused.
+    //
     // - If current worker count is less than max workers, workers will be spawned,
     //   up to 'max_workers' amount, and immediately paused. This ensures every
     //   possible worker that could exist in 'this' pool is paused.
+    //
     // - Paused workers are unable to accept new signals, but you can still submit
     //   signals so workers can handle them when they are unpaused.
+    //
     // - To unpause, you must explicitly call `.resume()` on your pool instance.
+    //
     // - If the pool is stopped while paused, workers are unpaused and queued tasks
     //   are processed during `stop_wait()`.
+    //
     // - If the pool is already paused, we ignore this call.
+    //
     fn pause_pool(&self, wait: bool) {
         let mut is_paused = lock_safe(&self.paused);
         if self.is_stopped() || *is_paused {
