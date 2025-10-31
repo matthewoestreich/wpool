@@ -33,7 +33,10 @@ impl Dispatcher {
         }
     }
 
-    pub(crate) fn spawn(self: Arc<Self>, task_channel_receiver: mpsc::Receiver<Signal>) -> Arc<Self> {
+    pub(crate) fn spawn(
+        self: Arc<Self>,
+        task_channel_receiver: mpsc::Receiver<Signal>,
+    ) -> Arc<Self> {
         if self.has_spawned.swap(true, Ordering::Relaxed) {
             return self;
         }
