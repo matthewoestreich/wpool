@@ -33,7 +33,7 @@ impl Dispatcher {
         }
     }
 
-    pub(crate) fn spawn(self: Arc<Self>, task_receiver: mpsc::Receiver<Signal>) -> Arc<Self> {
+    pub(crate) fn spawn(self: Arc<Self>, task_channel_receiver: mpsc::Receiver<Signal>) -> Arc<Self> {
         if self.has_spawned.swap(true, Ordering::Relaxed) {
             return self;
         }
@@ -48,14 +48,14 @@ impl Dispatcher {
                 // queue. Once the waiting queue is empty, then go back to submitting incoming
                 // signals directly to available workers.
                 if !lock_safe(&this.waiting_queue).is_empty() {
-                    if !this.process_waiting_queue(&task_receiver) {
+                    if !this.process_waiting_queue(&task_channel_receiver) {
                         break;
                     }
                     continue;
                 }
 
                 // Blocks until we get a task or the task channel is closed.
-                let signal = match task_receiver.recv() {
+                let signal = match task_channel_receiver.recv() {
                     Ok(signal) => signal,
                     Err(RecvError) => break,
                 };
