@@ -15,7 +15,7 @@ use crate::{
 pub struct WPool {
     pub(crate) dispatcher: Arc<Dispatcher>,
     max_workers: usize,
-    paused: AtomicBool,
+    paused: Mutex<bool>,
     pauser: Arc<Pauser>,
     stop_once: Once,
     stopped: AtomicBool,
@@ -31,7 +31,7 @@ impl WPool {
         Self {
             dispatcher: dispatcher.spawn(task_channel.receiver),
             max_workers,
-            paused: AtomicBool::new(false),
+            paused: Mutex::new(false),
             pauser: Pauser::new(),
             stop_once: Once::new(),
             stopped: AtomicBool::new(false),
@@ -88,7 +88,9 @@ impl WPool {
     // Unpauses a paused pool by sending an 'unpause' message through a channel to each worker.
     // You must explicitly call resume on a paused pool to unpause it.
     pub fn resume(&self) {
-        if self.is_stopped() || !self.is_paused() {
+        let mut is_paused = lock_safe(&self.paused);
+
+        if self.is_stopped() || !*is_paused {
             return;
         }
 
@@ -96,15 +98,7 @@ impl WPool {
             self.pauser.send_resume();
         }
 
-        self.set_paused(false);
-    }
-
-    fn is_paused(&self) -> bool {
-        self.paused.load(Ordering::Relaxed)
-    }
-
-    fn set_paused(&self, is_paused: bool) {
-        self.paused.store(is_paused, Ordering::Relaxed);
+        *is_paused = false;
     }
 
     fn is_stopped(&self) -> bool {
@@ -120,12 +114,15 @@ impl WPool {
     // - If current worker count is less than max workers, workers will be spawned,
     //   up to 'max_workers' amount, and immediately paused. This ensures every
     //   possible worker that could exist in 'this' pool is paused.
-    // - Paused workers are unable to accept new signals.
+    // - Paused workers are unable to accept new signals, but you can still submit
+    //   signals so workers can handle them when they are unpaused.
     // - To unpause, you must explicitly call `.resume()` on your pool instance.
-    // - If the pool is stopped, we ignore this call and do not pause the pool.
+    // - If the pool is stopped while paused, workers are unpaused and queued tasks
+    //   are processed during `stop_wait()`.
     // - If the pool is already paused, we ignore this call.
     fn pause_pool(&self, wait: bool) {
-        if self.is_stopped() || self.is_paused() {
+        let mut is_paused = lock_safe(&self.paused);
+        if self.is_stopped() || *is_paused {
             return;
         }
 
@@ -142,7 +139,7 @@ impl WPool {
             }
         }
 
-        self.set_paused(true);
+        *is_paused = true;
     }
 
     // "Quality-of-life" function, easier to submit signals directly to the dispatcher.
@@ -150,40 +147,29 @@ impl WPool {
         if self.is_stopped() {
             return;
         }
-        if let Some(tx) = lock_safe(&self.task_sender).as_ref() {
-            let _ = tx.send(signal);
+        if let Some(task_sender) = lock_safe(&self.task_sender).as_ref() {
+            let _ = task_sender.send(signal);
         }
     }
 
     fn shutdown(&self, wait: bool) {
         self.stop_once.call_once(|| {
+            // Unpause any paused workers. If we aren't paused, this is essentially a no-op.
+            self.resume();
+            // Acquire pause lock to wait for any pauses in progress to complete
+            let pause_lock = lock_safe(&self.paused);
             self.set_stopped(true);
-            self.dispatcher.is_waiting.store(wait, Ordering::Relaxed);
-
-            // Close the task channel by dropping sender.
+            drop(pause_lock);
+            // Let dispatcher know if it should process it's waiting queue before exiting.
+            self.dispatcher.set_is_waiting(wait);
+            // Close the task channel.
             if let Some(task_sender) = lock_safe(&self.task_sender).take() {
                 drop(task_sender);
             }
-
-            // Block until dispatcher thread has ended.
-            self.dispatcher.join();
-
-            let mut workers = lock_safe(&self.dispatcher.workers);
-
-            // Kill all worker threads.
-            for _ in 0..workers.len() {
-                let _ = self
-                    .dispatcher
-                    .worker_channel
-                    .sender
-                    .send(Signal::Terminate);
-            }
-
-            // Block until all worker threads have ended.
-            for mut w in workers.drain(..) {
-                w.join();
-            }
         });
+
+        // Wait for the dispatcher thread to end before continuing
+        self.dispatcher.join();
     }
 }
 
@@ -320,6 +306,45 @@ mod tests {
     }
 
     #[test]
+    fn test_jobs_arent_ran_while_paused() {
+        let max_workers = 3;
+        let num_jobs = 5;
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        let p = WPool::new(max_workers);
+
+        // Batch 1.
+        for _ in 0..num_jobs {
+            let thread_counter = Arc::clone(&counter);
+            p.submit(move || {
+                thread::sleep(Duration::from_millis(500));
+                thread_counter.fetch_add(1, Ordering::Relaxed);
+            });
+        }
+
+        p.pause_wait();
+
+        // Batch 2.
+        for _ in 0..num_jobs {
+            let thread_counter = Arc::clone(&counter);
+            p.submit(move || {
+                thread::sleep(Duration::from_millis(500));
+                thread_counter.fetch_add(1, Ordering::Relaxed);
+            });
+        }
+
+        // Even though hwe added 'num_jobs * 2' amount of jobs, only the jobs
+        // called prior to p.pause_wait() should have ran.
+        // Only "Batch 1" should have ran.
+        assert_eq!(counter.load(Ordering::Relaxed), num_jobs);
+
+        p.stop_wait();
+
+        // Now Batch 2 jobs should have ran
+        assert_eq!(counter.load(Ordering::Relaxed), num_jobs * 2);
+    }
+
+    #[test]
     fn test_pause_wait_does_not_run_tasks_while_paused() {
         let p = Arc::new(WPool::new(3));
         let counter = Arc::new(AtomicUsize::new(0));
@@ -336,11 +361,11 @@ mod tests {
             let _p = Arc::clone(&p);
             thread::spawn(move || {
                 println!("pausing from diff thread");
-                _p.pause_wait(); 
+                _p.pause_wait();
             })
         };
         // Wait for pause thread to finish
-        let _ = pause_handle.join(); 
+        let _ = pause_handle.join();
         println!("pause thread finished");
         // Submit tasks while paused
         let paused_counter = Arc::new(AtomicUsize::new(0));

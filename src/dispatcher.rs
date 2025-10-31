@@ -13,7 +13,7 @@ use crate::{channel::ThreadedChannel, lock_safe, signal::Signal, worker::Worker}
 pub(crate) struct Dispatcher {
     has_spawned: AtomicBool,
     pub(crate) handle: Mutex<Option<thread::JoinHandle<()>>>,
-    pub(crate) is_waiting: AtomicBool,
+    pub(crate) waiting: AtomicBool,
     pub(crate) max_workers: usize,
     pub(crate) waiting_queue: Mutex<VecDeque<Signal>>,
     pub(crate) worker_channel: ThreadedChannel<Signal>,
@@ -25,7 +25,7 @@ impl Dispatcher {
         Self {
             has_spawned: AtomicBool::new(false),
             handle: None.into(),
-            is_waiting: AtomicBool::new(false),
+            waiting: AtomicBool::new(false),
             max_workers,
             waiting_queue: VecDeque::new().into(),
             worker_channel,
@@ -60,6 +60,7 @@ impl Dispatcher {
                     Err(RecvError) => break,
                 };
 
+                // Got a signal.
                 let mut workers = lock_safe(&this.workers);
                 if workers.len() < this.max_workers {
                     workers.push(Worker::spawn(Arc::clone(&worker_channel_receiver)));
@@ -74,8 +75,20 @@ impl Dispatcher {
             }
 
             // If the user has called `.stop_wait()`, wait for the waiting queue to also finish.
-            if this.is_waiting.load(Ordering::Relaxed) {
+            if this.is_waiting() {
                 this.run_queued_tasks();
+            }
+
+            let mut workers = lock_safe(&this.workers);
+
+            // Kill all worker threads.
+            for _ in 0..workers.len() {
+                let _ = this.worker_channel.sender.send(Signal::Terminate);
+            }
+
+            // Block until all worker threads have ended.
+            for mut w in workers.drain(..) {
+                w.join();
             }
         }));
 
@@ -86,6 +99,14 @@ impl Dispatcher {
         if let Some(handle) = lock_safe(&self.handle).take() {
             let _ = handle.join();
         }
+    }
+
+    pub(crate) fn is_waiting(&self) -> bool {
+        self.waiting.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_is_waiting(&self, is_waiting: bool) {
+        self.waiting.store(is_waiting, Ordering::Relaxed);
     }
 
     fn process_waiting_queue(&self, task_receiver: &mpsc::Receiver<Signal>) -> bool {
