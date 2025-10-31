@@ -82,14 +82,12 @@ impl Dispatcher {
             let mut workers = lock_safe(&this.workers);
 
             // Kill all worker threads.
-            for _ in 0..workers.len() {
+            workers.iter().for_each(|_| {
                 let _ = this.worker_channel.sender.send(Signal::Terminate);
-            }
+            });
 
             // Block until all worker threads have ended.
-            for mut w in workers.drain(..) {
-                w.join();
-            }
+            workers.drain(..).for_each(|mut worker| worker.join());
         }));
 
         self
