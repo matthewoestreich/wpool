@@ -129,17 +129,16 @@ impl Dispatcher {
                     Err(RecvError) => break,
                 };
 
-                let mut workers = safe_lock(&dispatcher.workers);
-
-                if workers.len() < dispatcher.max_workers {
+                if dispatcher.workers_len() < dispatcher.max_workers {
                     let id = get_next_id();
+
                     let worker = Worker::spawn(
                         id,
                         Arc::clone(&dispatcher.worker_channel.receiver),
                         dispatcher.worker_status_channel.clone_sender(),
                     );
 
-                    workers.insert(id, worker);
+                    dispatcher.workers_insert(id, worker);
                     dispatcher.available_workers_insert(id);
 
                     if dispatcher.has_available_workers() {
@@ -216,6 +215,14 @@ impl Dispatcher {
 
     fn available_workers_remove(&self, element: &usize) -> bool {
         safe_lock(&self.available_workers).remove(element)
+    }
+
+    fn workers_len(&self) -> usize {
+        safe_lock(&self.workers).len()
+    }
+
+    fn workers_insert(&self, id: usize, worker: Worker) -> Option<Worker> {
+        safe_lock(&self.workers).insert(id, worker)
     }
 
     fn workers_remove(&self, element: &usize) -> Option<Worker> {
