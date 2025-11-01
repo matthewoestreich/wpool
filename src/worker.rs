@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{lock_safe, signal::Signal};
+use crate::{Signal, lock_safe};
 
 pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 

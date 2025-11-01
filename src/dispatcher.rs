@@ -8,7 +8,7 @@ use std::{
     thread,
 };
 
-use crate::{channel::ThreadedChannel, lock_safe, signal::Signal, worker::Worker};
+use crate::{Signal, channel::ThreadedChannel, lock_safe, worker::Worker};
 
 // Returns numbers in sequential order. Used as worker id's.
 // ```rust

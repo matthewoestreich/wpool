@@ -5,11 +5,11 @@ use std::sync::{
 };
 
 use crate::{
+    Signal,
     channel::{Channel, ThreadedChannel},
     dispatcher::Dispatcher,
     lock_safe,
     pauser::Pauser,
-    signal::Signal,
 };
 
 pub struct WPool {
