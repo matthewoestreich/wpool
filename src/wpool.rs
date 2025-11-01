@@ -152,7 +152,7 @@ impl WPool {
         if self.is_stopped() {
             return;
         }
-        if let Some(task_sender) = safe_lock(&self.task_sender).as_ref() {
+        if let Some(ref task_sender) = *safe_lock(&self.task_sender) {
             let _ = task_sender.send(signal);
         }
     }
