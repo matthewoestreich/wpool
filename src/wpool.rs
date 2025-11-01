@@ -74,14 +74,43 @@ impl WPool {
         self.shutdown(false);
     }
 
-    // Pauses all workers and blocks until each worker has acknowledged they're paused.
-    pub fn pause_wait(&self) {
-        self.pause_pool(true);
-    }
-
-    // Pauses all workers but does not wait for each worker to acknowledge they're paused.
+    //
+    // Pause all possible workers.
+    //
+    // - Blocks until all workers have acknowledged that they're paused.
+    //
+    // - If current worker count is less than max workers, workers will be spawned,
+    //   up to 'max_workers' amount, and immediately paused. This ensures every
+    //   possible worker that could exist in 'this' pool is paused.
+    //
+    // - Paused workers are unable to accept new signals, but you can still submit
+    //   signals so workers can handle them when they are unpaused.
+    //
+    // - To unpause, you must explicitly call `.resume()` on your pool instance.
+    //
+    // - If the pool is stopped while paused, workers are unpaused and queued tasks
+    //   are processed during `stop_wait()`.
+    //
+    // - If the pool is already paused, we ignore this call.
+    //
     pub fn pause(&self) {
-        self.pause_pool(false);
+        let mut is_paused = safe_lock(&self.paused);
+        if self.is_stopped() || *is_paused {
+            return;
+        }
+
+        let pauser = Arc::clone(&self.pauser);
+
+        for _ in 0..self.max_workers {
+            self.submit_signal(Signal::Pause(Arc::clone(&pauser)));
+        }
+
+        // Blocks until all workers tell us they're paused.
+        for _ in 0..self.max_workers {
+            pauser.recv_ack();
+        }
+
+        *is_paused = true;
     }
 
     // Resumes/unpauses all workers.
@@ -104,47 +133,6 @@ impl WPool {
 
     fn set_stopped(&self, is_stopped: bool) {
         self.stopped.store(is_stopped, Ordering::SeqCst);
-    }
-
-    //
-    // Pause all possible workers.
-    //
-    // - If `wait` is true, we block until all workers acknowledge they're paused.
-    //
-    // - If current worker count is less than max workers, workers will be spawned,
-    //   up to 'max_workers' amount, and immediately paused. This ensures every
-    //   possible worker that could exist in 'this' pool is paused.
-    //
-    // - Paused workers are unable to accept new signals, but you can still submit
-    //   signals so workers can handle them when they are unpaused.
-    //
-    // - To unpause, you must explicitly call `.resume()` on your pool instance.
-    //
-    // - If the pool is stopped while paused, workers are unpaused and queued tasks
-    //   are processed during `stop_wait()`.
-    //
-    // - If the pool is already paused, we ignore this call.
-    //
-    fn pause_pool(&self, wait: bool) {
-        let mut is_paused = safe_lock(&self.paused);
-        if self.is_stopped() || *is_paused {
-            return;
-        }
-
-        let pauser = Arc::clone(&self.pauser);
-
-        for _ in 0..self.max_workers {
-            self.submit_signal(Signal::Pause(Arc::clone(&pauser)));
-        }
-
-        if wait {
-            // Blocks until all workers tell us they're paused.
-            for _ in 0..self.max_workers {
-                pauser.recv_ack();
-            }
-        }
-
-        *is_paused = true;
     }
 
     // "Quality-of-life" function, easier to submit signals directly to the dispatcher.
@@ -186,14 +174,27 @@ mod tests {
     use std::{
         sync::{
             Arc, Mutex,
-            atomic::{AtomicU32, AtomicUsize, Ordering},
+            atomic::{AtomicUsize, Ordering},
             mpsc,
         },
         thread,
-        time::{Duration, Instant},
+        time::Duration,
     };
 
     use crate::{safe_lock, worker::WORKER_IDLE_TIMEOUT, wpool::WPool};
+
+    #[test]
+    fn test_basic() {
+        let p = WPool::new(3);
+
+        for _ in 0..3 {
+            p.submit(|| {
+                thread::sleep(Duration::from_millis(100));
+            });
+        }
+
+        p.stop_wait();
+    }
 
     #[test]
     fn test_stop_wait_basic() {
@@ -236,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pause_wait_basic() {
+    fn test_pause_basic() {
         let max_workers = 3;
         let num_jobs = 3;
         let p = WPool::new(max_workers);
@@ -245,7 +246,7 @@ mod tests {
             p.submit(|| {});
         }
 
-        p.pause_wait();
+        p.pause();
         p.resume();
         p.stop_wait();
     }
@@ -287,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pause_wait_waits_for_worker_ack() {
+    fn test_pause_waits_for_worker_ack() {
         let p = Arc::new(WPool::new(3));
         let acked = Arc::new(AtomicUsize::new(0));
         let (started_tx, started_rx) = mpsc::channel::<()>();
@@ -314,7 +315,7 @@ mod tests {
         // Spawn thread to pause pool (will block until workers acknowledge pause)
         let p_clone = Arc::clone(&p);
         let handle = thread::spawn(move || {
-            p_clone.pause_wait();
+            p_clone.pause();
         });
 
         thread::sleep(Duration::from_millis(50));
@@ -350,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pause_wait_jobs_arent_ran_while_paused() {
+    fn test_pause_jobs_arent_ran_while_paused() {
         fn first() {
             let max_workers = 3;
             let num_jobs = 5;
@@ -367,7 +368,7 @@ mod tests {
                 });
             }
 
-            p.pause_wait();
+            p.pause();
 
             // Batch 2.
             for _ in 0..num_jobs {
@@ -383,6 +384,7 @@ mod tests {
             // Only "Batch 1" should have ran.
             assert_eq!(counter.load(Ordering::SeqCst), num_jobs);
 
+            p.resume();
             p.stop_wait();
 
             // Now Batch 2 jobs should have ran
@@ -405,7 +407,7 @@ mod tests {
                 let _p = Arc::clone(&p);
                 thread::spawn(move || {
                     println!("pausing from diff thread");
-                    _p.pause_wait();
+                    _p.pause();
                 })
             };
             // Wait for pause thread to finish
@@ -442,77 +444,198 @@ mod tests {
     }
 
     #[test]
-    fn test_pause_is_nonblocking() {
-        let pool = WPool::new(2);
+    fn test_shutdown_during_pause() {
+        let max_workers = 3;
+        let num_jobs = 300;
+        let pool = Arc::new(WPool::new(max_workers));
         let counter = Arc::new(AtomicUsize::new(0));
-
-        // Start some ongoing tasks
-        for _ in 0..4 {
-            let c = counter.clone();
+        for _ in 0..num_jobs {
+            let c = Arc::clone(&counter);
             pool.submit(move || {
-                thread::sleep(Duration::from_millis(20));
+                thread::sleep(Duration::from_millis(50));
                 c.fetch_add(1, Ordering::SeqCst);
             });
         }
-
-        let start = Instant::now();
-        pool.pause(); // should not block
-        let elapsed = start.elapsed();
-        // Should be essentially instantaneous
-        assert!(elapsed < Duration::from_millis(5));
-        // Give workers a short time to process pause
-        thread::sleep(Duration::from_millis(50));
-        // No further tasks should be executing now
-        let value = counter.load(Ordering::SeqCst);
-        thread::sleep(Duration::from_millis(50));
-        assert_eq!(counter.load(Ordering::SeqCst), value);
-        pool.resume();
+        let pool_clone = Arc::clone(&pool);
+        // Pause pool in a separate thread
+        let pause_handle = thread::spawn(move || {
+            pool_clone.pause();
+        });
+        // Wait a tiny bit so pause starts but workers may not have acked yet
+        thread::sleep(Duration::from_millis(2));
+        // Call stop_wait while workers are paused
         pool.stop_wait();
+        pause_handle.join().unwrap();
+        assert_eq!(counter.load(Ordering::SeqCst), num_jobs);
     }
 
     #[test]
-    fn test_pause_does_not_run_jobs_while_paused() {
-        let max_workers = 2;
-        let num_jobs = 4;
-        let job_sleep_dur = Duration::from_millis(20);
-        let pool = WPool::new(max_workers);
-        let counter = Arc::new(AtomicU32::new(0));
-
-        // First Batch.
-        // Start some ongoing tasks
-        for _ in 0..num_jobs {
-            let c = counter.clone();
-            pool.submit(move || {
-                thread::sleep(job_sleep_dur);
-                c.fetch_add(1, Ordering::SeqCst);
-            });
-        }
-
-        let start = Instant::now();
-        pool.pause(); // should not block
-        let elapsed = start.elapsed();
-        // Should be essentially instantaneous
-        assert!(elapsed < Duration::from_millis(5));
-        // Give workers a enough time to process pause
-        thread::sleep((num_jobs + 1) * job_sleep_dur);
-
-        // Second Batch.
-        // Add more jobs - these should not be executed
-        for _ in 0..num_jobs {
-            let c = counter.clone();
-            pool.submit(move || {
-                thread::sleep(job_sleep_dur);
-                c.fetch_add(1, Ordering::SeqCst);
-            });
-        }
-
-        // No further tasks should be executing now
-        assert_eq!(counter.load(Ordering::SeqCst), num_jobs);
+    fn test_worker_timeout_during_pause() {
+        let pool = Arc::new(WPool::new(2));
+        let counter = Arc::new(AtomicUsize::new(0));
+        let thread_counter = Arc::clone(&counter);
+        // Submit one long task to make sure worker is busy initially
+        pool.submit(move || {
+            thread::sleep(Duration::from_secs(3));
+            thread_counter.fetch_add(1, Ordering::SeqCst);
+        });
+        let pool_clone = Arc::clone(&pool);
+        // Pause pool in a separate thread
+        let pause_handle = thread::spawn(move || {
+            pool_clone.pause();
+        });
+        // Wait enough for idle timeout to fire
+        thread::sleep(Duration::from_secs(3));
+        // Now resume and stop
         pool.resume();
         pool.stop_wait();
-        // After resuming and waiting NOW the second batch of jobs should have been run.
-        assert_eq!(counter.load(Ordering::SeqCst), num_jobs * 2);
+        pause_handle.join().unwrap();
+        // Test didn't deadlock and tasks completed
+        assert!(counter.load(Ordering::SeqCst) > 0);
     }
+
+    #[test]
+    fn test_overflow() {
+        let max_workers = 2;
+        let num_jobs = 64;
+        let expected_len = 62;
+        let (release_sender, release_rx) = mpsc::channel::<()>();
+        let release_receiver = Arc::new(Mutex::new(release_rx));
+        let p = WPool::new(max_workers);
+        // Start workers, and have them all wait on a channel before completing.
+        for _ in 0..num_jobs {
+            let thread_release_receiver = Arc::clone(&release_receiver);
+            p.submit(move || {
+                loop {
+                    if thread_release_receiver.lock().unwrap().try_recv().is_ok() {
+                        break;
+                    }
+                }
+            });
+        }
+        // Start a thread to free the workers after calling stop.  This way
+        // the dispatcher can exit, then when this thread runs, the pool
+        // can exit.
+        let release_thread_sender = release_sender.clone();
+        let release_handle = thread::spawn(move || {
+            for _ in 0..num_jobs {
+                let _ = release_thread_sender.send(());
+            }
+        });
+        p.stop();
+        // Now that the pool has exited, it is safe to inspect its waiting
+        // queue without causing a race.
+        let wq_len = p.dispatcher.waiting_queue.lock().unwrap().len();
+        assert_eq!(
+            wq_len, expected_len,
+            "Expected waiting to queue to have len of '{expected_len}' but got '{wq_len}'"
+        );
+        let _ = release_handle.join();
+    }
+
+    #[test]
+    fn test_waiting_queue_len_race() {
+        let num_threads = 10;
+        let num_jobs = 20;
+        let max_workers = 5;
+        let max_seen = Arc::new(Mutex::<usize>::new(0));
+        let mut handles = Vec::<thread::JoinHandle<()>>::new();
+
+        let wp = Arc::new(WPool::new(max_workers));
+
+        let max_seen_clone = Arc::clone(&max_seen);
+
+        for _ in 0..num_threads {
+            let thread_pool = Arc::clone(&wp);
+            let thread_max_seen = Arc::clone(&max_seen_clone);
+
+            let handle = thread::spawn(move || {
+                let max = Mutex::<usize>::new(0);
+
+                for _ in 0..num_jobs {
+                    thread_pool.submit(move || {
+                        thread::sleep(Duration::from_millis(1));
+                    });
+                    let waiting = thread_pool.dispatcher.waiting_queue.lock().unwrap().len();
+                    let mut max_guard = max.lock().unwrap();
+                    if waiting > *max_guard {
+                        *max_guard = waiting;
+                    }
+                }
+
+                let max_guard = max.lock().unwrap();
+                let mut max_seen_guard = thread_max_seen.lock().unwrap();
+
+                if *max_guard > *max_seen_guard {
+                    *max_seen_guard = *max_guard;
+                }
+            });
+
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            let _ = handle.join();
+        }
+
+        let max_seen_guard = *max_seen.lock().unwrap();
+        println!("max_seen = {max_seen_guard}");
+        assert!(max_seen_guard > 0, "expected to see waiting queue size > 0");
+        assert!(
+            max_seen_guard < num_threads * num_jobs,
+            "should not have seen all tasks on waiting queue"
+        );
+    }
+
+    /*
+    #[test]
+    fn test_submitting_jobs_from_diff_thread_whille_pause() {
+        let max_workers = 5;
+        let num_jobs = 50;
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_1 = Arc::clone(&counter);
+        let counter_2 = Arc::clone(&counter);
+        let mut handles = Vec::new();
+
+        let pool = Arc::new(WPool::new(max_workers));
+        let p = Arc::clone(&pool);
+
+        let _outer_handle = thread::spawn(move || {
+            // Try to time it to where we submit these other jobs at the same time we call pause
+            thread::sleep(Duration::from_millis(
+                (50 * max_workers).try_into().unwrap(),
+            ));
+            let outer_counter = Arc::clone(&counter_1);
+            let outer_p = Arc::clone(&p);
+            for _ in 0..num_jobs {
+                let thread_p = Arc::clone(&outer_p);
+                let thread_counter = Arc::clone(&outer_counter);
+                let handle = thread::spawn(move || {
+                    thread_p.submit(move || {
+                        thread::sleep(Duration::from_millis(300));
+                        thread_counter.fetch_add(1, Ordering::SeqCst);
+                    });
+                });
+                handles.push(handle);
+            }
+        });
+
+        for _ in 0..max_workers {
+            let thread_counter = Arc::clone(&counter_2);
+            pool.submit(move || {
+                thread_counter.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+
+        println!("pausing...");
+        pool.pause();
+        println!("all workers are paused");
+        // should only have 'max_workers' number of jobs done here
+        assert_eq!(counter.load(Ordering::SeqCst), max_workers, "failed at first comparison");
+        pool.stop_wait();
+        assert_eq!(counter.load(Ordering::SeqCst), num_jobs + max_workers);
+    }
+    */
 
     #[test]
     fn test_long_running_job_continues_after_stop_wait() {
