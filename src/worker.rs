@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{Signal, lock_safe};
+use crate::{Signal, safe_lock};
 
 pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -26,7 +26,7 @@ impl Worker {
             handle: Some(thread::spawn(move || {
                 loop {
                     // Blocks until we either receive a signal, channel is closed, or timeout is hit.
-                    let signal = match lock_safe(&worker_rx).recv_timeout(WORKER_IDLE_TIMEOUT) {
+                    let signal = match safe_lock(&worker_rx).recv_timeout(WORKER_IDLE_TIMEOUT) {
                         Ok(signal) => signal,
                         Err(RecvTimeoutError::Timeout) => {
                             let _ = worker_status_tx.send(id);

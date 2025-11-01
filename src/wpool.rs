@@ -8,7 +8,7 @@ use crate::{
     Signal,
     channel::{Channel, ThreadedChannel},
     dispatcher::Dispatcher,
-    lock_safe,
+    safe_lock,
     pauser::Pauser,
 };
 
@@ -86,7 +86,7 @@ impl WPool {
 
     // Resumes/unpauses all workers.
     pub fn resume(&self) {
-        let mut is_paused = lock_safe(&self.paused);
+        let mut is_paused = safe_lock(&self.paused);
         if self.is_stopped() || !*is_paused {
             return;
         }
@@ -126,7 +126,7 @@ impl WPool {
     // - If the pool is already paused, we ignore this call.
     //
     fn pause_pool(&self, wait: bool) {
-        let mut is_paused = lock_safe(&self.paused);
+        let mut is_paused = safe_lock(&self.paused);
         if self.is_stopped() || *is_paused {
             return;
         }
@@ -152,7 +152,7 @@ impl WPool {
         if self.is_stopped() {
             return;
         }
-        if let Some(task_sender) = lock_safe(&self.task_sender).as_ref() {
+        if let Some(task_sender) = safe_lock(&self.task_sender).as_ref() {
             let _ = task_sender.send(signal);
         }
     }
@@ -163,7 +163,7 @@ impl WPool {
             self.resume();
 
             // Acquire pause lock to wait for any pauses in progress to complete
-            let pause_lock = lock_safe(&self.paused);
+            let pause_lock = safe_lock(&self.paused);
             self.set_stopped(true);
             drop(pause_lock);
 
@@ -171,7 +171,7 @@ impl WPool {
             self.dispatcher.set_is_waiting(wait);
 
             // Close the task channel.
-            if let Some(task_sender) = lock_safe(&self.task_sender).take() {
+            if let Some(task_sender) = safe_lock(&self.task_sender).take() {
                 drop(task_sender);
             }
         });
@@ -193,7 +193,7 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use crate::{lock_safe, worker::WORKER_IDLE_TIMEOUT, wpool::WPool};
+    use crate::{safe_lock, worker::WORKER_IDLE_TIMEOUT, wpool::WPool};
 
     #[test]
     fn test_stop_wait_basic() {
@@ -283,7 +283,7 @@ mod tests {
         // Ensure all workers have passed the timeout
         thread::sleep((WORKER_IDLE_TIMEOUT * (max_workers as u32)) + Duration::from_millis(250));
         p.stop_wait();
-        assert_eq!(lock_safe(&p.dispatcher.workers).len(), 0);
+        assert_eq!(safe_lock(&p.dispatcher.workers).len(), 0);
     }
 
     #[test]

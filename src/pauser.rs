@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{channel::ThreadedChannel, lock_safe};
+use crate::{channel::ThreadedChannel, safe_lock};
 
 //
 // Pauser is a 'quality-of-life' wrapper to simplify thread sync between
@@ -68,13 +68,13 @@ impl Pauser {
     // blocks until controller thread sends the resume message.
     pub(crate) fn pause_this_thread(&self) {
         let _ = self.ack_chan.sender.send(());
-        let _ = lock_safe(&self.pause_chan.receiver).recv();
+        let _ = safe_lock(&self.pause_chan.receiver).recv();
     }
 
     // Call from controller thread.
     // Blocks until non-controller thread tells us they are paused.
     pub(crate) fn recv_ack(&self) {
-        let _ = lock_safe(&self.ack_chan.receiver).recv();
+        let _ = safe_lock(&self.ack_chan.receiver).recv();
     }
 
     // Call from controller thread.

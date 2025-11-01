@@ -15,7 +15,7 @@ pub(crate) enum Signal {
 }
 
 // Allows us to easily lock a Mutex while handling possible poison.
-pub(crate) fn lock_safe<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+pub(crate) fn safe_lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     match m.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),

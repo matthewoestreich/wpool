@@ -8,7 +8,7 @@ use std::{
     thread,
 };
 
-use crate::{Signal, channel::ThreadedChannel, lock_safe, worker::Worker};
+use crate::{Signal, channel::ThreadedChannel, safe_lock, worker::Worker};
 
 // Returns numbers in sequential order. Used as worker id's.
 // ```rust
@@ -86,8 +86,8 @@ impl Dispatcher {
         // if it did not receive a signal within the timeout duration.
         let worker_status_handle = thread::spawn(move || {
             // Block until we get a worker id or worker status channel is closed.
-            while let Ok(worker_id) = lock_safe(&handler.worker_status_receiver).recv() {
-                if let Some(mut worker) = lock_safe(&handler.workers).remove(&worker_id) {
+            while let Ok(worker_id) = safe_lock(&handler.worker_status_receiver).recv() {
+                if let Some(mut worker) = safe_lock(&handler.workers).remove(&worker_id) {
                     worker.join();
                 }
             }
@@ -97,13 +97,13 @@ impl Dispatcher {
         // It is responsible for receiving tasks, dispatching tasks to workers, spawning
         // workers, killing workers during pool shutdown, holding the 'source of truth'
         // list for all spawned worker threads, and more.
-        *lock_safe(&self.handle) = Some(thread::spawn(move || {
+        *safe_lock(&self.handle) = Some(thread::spawn(move || {
             loop {
                 // As long as the waiting queue isn't empty, incoming signals (on task channel)
                 // are put into the waiting queue and signals to run are taken from the waiting
                 // queue. Once the waiting queue is empty, then go back to submitting incoming
                 // signals directly to available workers.
-                if !lock_safe(&dispatcher.waiting_queue).is_empty() {
+                if !safe_lock(&dispatcher.waiting_queue).is_empty() {
                     if !dispatcher.process_waiting_queue(&task_channel_receiver) {
                         break;
                     }
@@ -116,11 +116,11 @@ impl Dispatcher {
                     Err(RecvError) => break,
                 };
 
-                let mut workers = lock_safe(&dispatcher.workers);
+                let mut workers = safe_lock(&dispatcher.workers);
 
                 if workers.len() < dispatcher.max_workers {
                     if let Some(ref worker_status_sender) =
-                        *lock_safe(&dispatcher.worker_status_sender)
+                        *safe_lock(&dispatcher.worker_status_sender)
                     {
                         let id = get_next_id();
                         let worker = Worker::spawn(
@@ -137,7 +137,7 @@ impl Dispatcher {
                     }
                 } else {
                     // At max workers, put signal in waiting queue.
-                    lock_safe(&dispatcher.waiting_queue).push_back(signal);
+                    safe_lock(&dispatcher.waiting_queue).push_back(signal);
                 }
             }
 
@@ -147,11 +147,11 @@ impl Dispatcher {
             }
 
             // Acquire longer-lived lock, we don't want anything messing with our workers list during shutdown.
-            let mut workers_guard = lock_safe(&dispatcher.workers);
+            let mut workers_guard = safe_lock(&dispatcher.workers);
             dispatcher.kill_all_workers(&mut workers_guard);
 
             // Close worker status channel.
-            if let Some(tx) = lock_safe(&dispatcher.worker_status_sender).take() {
+            if let Some(tx) = safe_lock(&dispatcher.worker_status_sender).take() {
                 drop(tx);
             }
             // Block until worker status thread has ended.
@@ -162,7 +162,7 @@ impl Dispatcher {
     }
 
     pub(crate) fn join(&self) {
-        if let Some(handle) = lock_safe(&self.handle).take() {
+        if let Some(handle) = safe_lock(&self.handle).take() {
             let _ = handle.join();
         }
     }
@@ -192,13 +192,13 @@ impl Dispatcher {
         match task_receiver.try_recv() {
             // Place any new signal from the task channel in the waiting queue.
             Ok(signal) => {
-                lock_safe(&self.waiting_queue).push_back(signal);
+                safe_lock(&self.waiting_queue).push_back(signal);
                 true
             }
             // If nothing came in on the task channel, try to grab something from
             // the waiting queue and send it to workers.
             Err(TryRecvError::Empty) => {
-                if let Some(signal) = lock_safe(&self.waiting_queue).pop_front() {
+                if let Some(signal) = safe_lock(&self.waiting_queue).pop_front() {
                     let _ = self.worker_channel.sender.send(signal);
                 }
                 true
@@ -209,7 +209,7 @@ impl Dispatcher {
     }
 
     fn run_queued_tasks(&self) {
-        let mut wq = lock_safe(&self.waiting_queue);
+        let mut wq = safe_lock(&self.waiting_queue);
         while !wq.is_empty() {
             if let Some(signal) = wq.pop_front() {
                 let _ = self.worker_channel.sender.send(signal);
