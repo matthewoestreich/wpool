@@ -99,11 +99,11 @@ impl WPool {
     }
 
     fn is_stopped(&self) -> bool {
-        self.stopped.load(Ordering::Relaxed)
+        self.stopped.load(Ordering::SeqCst)
     }
 
     fn set_stopped(&self, is_stopped: bool) {
-        self.stopped.store(is_stopped, Ordering::Relaxed);
+        self.stopped.store(is_stopped, Ordering::SeqCst);
     }
 
     //
@@ -207,12 +207,12 @@ mod tests {
             let counter_clone = counter.clone();
             p.submit(move || {
                 thread::sleep(Duration::from_millis(10));
-                counter_clone.fetch_add(1, Ordering::Relaxed);
+                counter_clone.fetch_add(1, Ordering::SeqCst);
                 println!("job {i:?} done");
             });
         }
         p.stop_wait();
-        assert_eq!(counter.load(Ordering::Relaxed), num_jobs);
+        assert_eq!(counter.load(Ordering::SeqCst), num_jobs);
     }
 
     #[test]
@@ -227,12 +227,12 @@ mod tests {
             let counter_clone = counter.clone();
             p.submit(move || {
                 thread::sleep(Duration::from_millis(10));
-                counter_clone.fetch_add(1, Ordering::Relaxed);
+                counter_clone.fetch_add(1, Ordering::SeqCst);
                 println!("job {i:?} done");
             });
         }
         p.stop();
-        assert!(counter.load(Ordering::Relaxed) < num_jobs);
+        assert!(counter.load(Ordering::SeqCst) < num_jobs);
     }
 
     #[test]
@@ -257,11 +257,11 @@ mod tests {
         let counter_clone = counter.clone();
 
         p.submit(move || {
-            counter_clone.fetch_add(1, Ordering::Relaxed);
+            counter_clone.fetch_add(1, Ordering::SeqCst);
         });
 
         p.stop_wait();
-        assert_eq!(counter.load(Ordering::Relaxed), 1);
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -276,7 +276,7 @@ mod tests {
             let thread_counter = Arc::clone(&counter);
             p.submit(move || {
                 thread::sleep(job_sleep_dur);
-                thread_counter.fetch_add(1, Ordering::Relaxed);
+                thread_counter.fetch_add(1, Ordering::SeqCst);
             });
         }
 
@@ -363,7 +363,7 @@ mod tests {
                 let thread_counter = Arc::clone(&counter);
                 p.submit(move || {
                     thread::sleep(Duration::from_millis(500));
-                    thread_counter.fetch_add(1, Ordering::Relaxed);
+                    thread_counter.fetch_add(1, Ordering::SeqCst);
                 });
             }
 
@@ -374,19 +374,19 @@ mod tests {
                 let thread_counter = Arc::clone(&counter);
                 p.submit(move || {
                     thread::sleep(Duration::from_millis(500));
-                    thread_counter.fetch_add(1, Ordering::Relaxed);
+                    thread_counter.fetch_add(1, Ordering::SeqCst);
                 });
             }
 
             // Even though hwe added 'num_jobs * 2' amount of jobs, only the jobs
             // called prior to p.pause_wait() should have ran.
             // Only "Batch 1" should have ran.
-            assert_eq!(counter.load(Ordering::Relaxed), num_jobs);
+            assert_eq!(counter.load(Ordering::SeqCst), num_jobs);
 
             p.stop_wait();
 
             // Now Batch 2 jobs should have ran
-            assert_eq!(counter.load(Ordering::Relaxed), num_jobs * 2);
+            assert_eq!(counter.load(Ordering::SeqCst), num_jobs * 2);
         }
 
         fn second() {
@@ -525,7 +525,7 @@ mod tests {
 
         fn sleep_for(d: Duration, counter: &Arc<AtomicUsize>) {
             thread::sleep(d);
-            counter.fetch_add(1, Ordering::Relaxed);
+            counter.fetch_add(1, Ordering::SeqCst);
         }
 
         for i in 0..max_workers {
@@ -543,7 +543,7 @@ mod tests {
         }
 
         p.stop_wait();
-        assert_eq!(counter.load(Ordering::Relaxed), max_workers);
+        assert_eq!(counter.load(Ordering::SeqCst), max_workers);
     }
 
     #[test]
@@ -565,12 +565,12 @@ mod tests {
             let counter_clone = counter.clone();
             p.submit(move || {
                 //println!("{i}");
-                counter_clone.fetch_add(1, Ordering::Relaxed);
+                counter_clone.fetch_add(1, Ordering::SeqCst);
             });
         }
 
         p.stop_wait();
-        assert_eq!(counter.load(Ordering::Relaxed), num_jobs);
+        assert_eq!(counter.load(Ordering::SeqCst), num_jobs);
     }
 
     #[test]
@@ -586,12 +586,12 @@ mod tests {
             let counter_clone = counter.clone();
             p.submit(move || {
                 //println!("{i}");
-                counter_clone.fetch_add(1, Ordering::Relaxed);
+                counter_clone.fetch_add(1, Ordering::SeqCst);
             });
         }
 
         p.stop_wait();
-        assert_eq!(counter.load(Ordering::Relaxed), num_jobs);
+        assert_eq!(counter.load(Ordering::SeqCst), num_jobs);
     }
 
     #[test]
@@ -605,12 +605,12 @@ mod tests {
         for _ in 0..num_jobs {
             let counter_clone = counter.clone();
             p.submit(move || {
-                counter_clone.fetch_add(1, Ordering::Relaxed);
+                counter_clone.fetch_add(1, Ordering::SeqCst);
                 thread::sleep(Duration::from_millis(500));
             });
         }
         p.stop_wait();
-        assert_eq!(counter.load(Ordering::Relaxed), num_jobs);
+        assert_eq!(counter.load(Ordering::SeqCst), num_jobs);
     }
 
     #[test]
@@ -623,11 +623,11 @@ mod tests {
 
         p.submit_wait(move || {
             thread::sleep(Duration::from_millis(500));
-            counter_clone.fetch_add(1, Ordering::Relaxed);
+            counter_clone.fetch_add(1, Ordering::SeqCst);
         });
 
         assert_eq!(
-            counter.load(Ordering::Relaxed),
+            counter.load(Ordering::SeqCst),
             1,
             "Did not wait for submit_wait job to complete"
         );

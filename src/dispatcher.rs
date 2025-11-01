@@ -70,7 +70,7 @@ impl Dispatcher {
         self: Arc<Self>,
         task_channel_receiver: mpsc::Receiver<Signal>,
     ) -> Arc<Self> {
-        if self.has_spawned.swap(true, Ordering::Relaxed) {
+        if self.has_spawned.swap(true, Ordering::SeqCst) {
             return self;
         }
 
@@ -168,11 +168,11 @@ impl Dispatcher {
     }
 
     pub(crate) fn is_waiting(&self) -> bool {
-        self.waiting.load(Ordering::Relaxed)
+        self.waiting.load(Ordering::SeqCst)
     }
 
     pub(crate) fn set_is_waiting(&self, is_waiting: bool) {
-        self.waiting.store(is_waiting, Ordering::Relaxed);
+        self.waiting.store(is_waiting, Ordering::SeqCst);
     }
 
     // Force the caller to already have a lock
