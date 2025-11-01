@@ -9,12 +9,12 @@ use crate::safe_lock;
 /// the raw `mpsc::Sender<T>`.
 /// Wraps the receiving half of the channel in `Arc<Mutex<mpsc::Receiver<T>>>`.
 #[derive(Clone)]
-pub(crate) struct ShareChannel<T> {
+pub(crate) struct ThreadSafeChannel<T> {
     pub(crate) sender: mpsc::Sender<T>,
     pub(crate) receiver: Arc<Mutex<mpsc::Receiver<T>>>,
 }
 
-impl<T> ShareChannel<T> {
+impl<T> ThreadSafeChannel<T> {
     pub(crate) fn new() -> Self {
         let (sender, rx) = mpsc::channel();
         Self {
@@ -26,12 +26,12 @@ impl<T> ShareChannel<T> {
 
 /// Wraps sender half of channel in `Mutex<Option<mpsc::Sender<T>>>`.
 /// Wraps receiver half of channel in `Arc<Mutex<mpsc::Receiver<T>>>`.
-pub(crate) struct OptionShareChannel<T> {
+pub(crate) struct ThreadSafeOptionChannel<T> {
     pub(crate) sender: Mutex<Option<mpsc::Sender<T>>>,
     pub(crate) receiver: Arc<Mutex<mpsc::Receiver<T>>>,
 }
 
-impl<T> OptionShareChannel<T> {
+impl<T> ThreadSafeOptionChannel<T> {
     pub(crate) fn new() -> Self {
         let (tx, rx) = mpsc::channel();
         Self {

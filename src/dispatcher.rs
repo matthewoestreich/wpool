@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     Signal,
-    channel::OptionShareChannel,
+    channel::ThreadSafeOptionChannel,
     safe_lock,
     worker::{Worker, WorkerStatus},
 };
@@ -48,9 +48,9 @@ pub(crate) struct Dispatcher {
     pub(crate) workers: Mutex<HashMap<usize, Worker>>,
     handle: Mutex<Option<thread::JoinHandle<()>>>,
     has_spawned: AtomicBool,
-    worker_channel: OptionShareChannel<Signal>,
-    task_channel: OptionShareChannel<Signal>,
-    worker_status_channel: OptionShareChannel<WorkerStatus>,
+    worker_channel: ThreadSafeOptionChannel<Signal>,
+    task_channel: ThreadSafeOptionChannel<Signal>,
+    worker_status_channel: ThreadSafeOptionChannel<WorkerStatus>,
     available_workers: Mutex<HashSet<usize>>,
     max_workers: usize,
 }
@@ -63,9 +63,9 @@ impl Dispatcher {
             waiting: false.into(),
             max_workers,
             waiting_queue: VecDeque::new().into(),
-            worker_channel: OptionShareChannel::new(),
-            worker_status_channel: OptionShareChannel::new(),
-            task_channel: OptionShareChannel::new(),
+            worker_channel: ThreadSafeOptionChannel::new(),
+            worker_status_channel: ThreadSafeOptionChannel::new(),
+            task_channel: ThreadSafeOptionChannel::new(),
             available_workers: HashSet::new().into(),
             workers: HashMap::new().into(),
         }

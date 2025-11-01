@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{channel::ShareChannel, safe_lock};
+use crate::{channel::ThreadSafeChannel, safe_lock};
 
 //
 // Pauser is a 'quality-of-life' wrapper to simplify thread sync between
@@ -51,15 +51,15 @@ use crate::{channel::ShareChannel, safe_lock};
 //
 #[derive(Clone)]
 pub(crate) struct Pauser {
-    ack_chan: ShareChannel<()>,
-    pause_chan: ShareChannel<()>,
+    ack_chan: ThreadSafeChannel<()>,
+    pause_chan: ThreadSafeChannel<()>,
 }
 
 impl Pauser {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
-            ack_chan: ShareChannel::new(),
-            pause_chan: ShareChannel::new(),
+            ack_chan: ThreadSafeChannel::new(),
+            pause_chan: ThreadSafeChannel::new(),
         })
     }
 
