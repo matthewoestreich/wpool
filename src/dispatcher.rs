@@ -172,11 +172,11 @@ impl Dispatcher {
     }
 
     pub(crate) fn close_task_channel(&self) {
-        self.task_channel.close();
+        self.task_channel.drop_sender();
     }
 
     pub(crate) fn close_worker_status_channel(&self) {
-        self.worker_status_channel.close();
+        self.worker_status_channel.drop_sender();
     }
 
     pub(crate) fn join(&self) {
@@ -236,7 +236,7 @@ impl Dispatcher {
     }
 
     fn kill_all_workers(&self) {
-        self.worker_channel.close();
+        self.worker_channel.drop_sender();
         // Block until all worker threads have ended.
         for (_, mut worker) in safe_lock(&self.workers).drain() {
             worker.join();

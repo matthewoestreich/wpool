@@ -51,7 +51,7 @@ impl<T> ThreadSafeOptionChannel<T> {
         safe_lock(&self.receiver).recv()
     }
 
-    pub(crate) fn close(&self) {
+    pub(crate) fn drop_sender(&self) {
         if let Some(sender) = safe_lock(&self.sender).take() {
             drop(sender);
         }
