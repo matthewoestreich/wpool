@@ -151,6 +151,7 @@ impl WPool {
 #[cfg(test)]
 mod tests {
     use std::{
+        panic,
         sync::{
             Arc, Mutex,
             atomic::{AtomicUsize, Ordering},
@@ -513,7 +514,37 @@ mod tests {
     }
 
     #[test]
-    fn test_waiting_queue_len_race() {
+    fn test_waiting_queue_len_race_100_times() {
+        let mut failed_iterations: Vec<(usize, String)> = Vec::new();
+        // This loop will continue indefinitely until 'inconsistent_test()' panics
+        // or the program is manually terminated (e.g., Ctrl+C).
+        for i in 0..100 {
+            let result = panic::catch_unwind(waiting_queue_len_race);
+
+            match result {
+                Ok(_) => {}
+                Err(e) => {
+                    // The panic payload is a Box<dyn Any + Send>
+                    if let Some(&s) = e.downcast_ref::<&str>() {
+                        failed_iterations.push((i, s.to_string()));
+                    } else {
+                        failed_iterations.push((i, "-".to_string()));
+                    }
+                }
+            }
+        }
+
+        println!("failed at iterations: {failed_iterations:#?}");
+        println!("number of failed runs: {}", failed_iterations.len());
+        assert_eq!(failed_iterations.len(), 0);
+    }
+
+    #[test]
+    fn test_wq_race() {
+        waiting_queue_len_race();
+    }
+
+    fn waiting_queue_len_race() -> usize {
         let num_threads = 10;
         let num_jobs = 20;
         let max_workers = 5;
@@ -564,6 +595,7 @@ mod tests {
             max_seen_guard < num_threads * num_jobs,
             "should not have seen all tasks on waiting queue"
         );
+        max_seen_guard
     }
 
     /*
