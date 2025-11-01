@@ -4,13 +4,7 @@ use std::sync::{
     mpsc::{self},
 };
 
-use crate::{
-    Signal,
-    channel::{Channel, ThreadedChannel},
-    dispatcher::Dispatcher,
-    pauser::Pauser,
-    safe_lock,
-};
+use crate::{Signal, dispatcher::Dispatcher, pauser::Pauser, safe_lock};
 
 pub struct WPool {
     pub(crate) dispatcher: Arc<Dispatcher>,
@@ -19,23 +13,19 @@ pub struct WPool {
     pauser: Arc<Pauser>,
     stop_once: Once,
     stopped: AtomicBool,
-    task_sender: Mutex<Option<mpsc::Sender<Signal>>>,
 }
 
 impl WPool {
     pub fn new(max_workers: usize) -> Self {
-        let task_channel = Channel::new();
-        let worker_channel = ThreadedChannel::new();
-        let dispatcher = Arc::new(Dispatcher::new(max_workers, worker_channel));
+        let dispatcher = Arc::new(Dispatcher::new(max_workers));
 
         Self {
-            dispatcher: dispatcher.spawn(task_channel.receiver),
+            dispatcher: dispatcher.spawn(),
             max_workers,
             paused: false.into(),
             pauser: Pauser::new(),
             stop_once: Once::new(),
             stopped: false.into(),
-            task_sender: Some(task_channel.sender).into(),
         }
     }
 
@@ -94,8 +84,10 @@ impl WPool {
     // - If the pool is already paused, we ignore this call.
     //
     pub fn pause(&self) {
+        // We want to hold the pause lock for the entirety of the pause operation.
         let mut is_paused = safe_lock(&self.paused);
-        if self.is_stopped() || *is_paused {
+
+        if self.stopped.load(Ordering::SeqCst) || *is_paused {
             return;
         }
 
@@ -115,8 +107,10 @@ impl WPool {
 
     // Resumes/unpauses all workers.
     pub fn resume(&self) {
+        // We want to hold the pause lock for the entirety of the resume operation.
         let mut is_paused = safe_lock(&self.paused);
-        if self.is_stopped() || !*is_paused {
+
+        if self.stopped.load(Ordering::SeqCst) || !*is_paused {
             return;
         }
 
@@ -127,41 +121,26 @@ impl WPool {
         *is_paused = false;
     }
 
-    fn is_stopped(&self) -> bool {
-        self.stopped.load(Ordering::SeqCst)
-    }
-
-    fn set_stopped(&self, is_stopped: bool) {
-        self.stopped.store(is_stopped, Ordering::SeqCst);
-    }
-
     // "Quality-of-life" function, easier to submit signals directly to the dispatcher.
     fn submit_signal(&self, signal: Signal) {
-        if self.is_stopped() {
+        if self.stopped.load(Ordering::SeqCst) {
             return;
         }
-        if let Some(ref task_sender) = *safe_lock(&self.task_sender) {
-            let _ = task_sender.send(signal);
-        }
+        self.dispatcher.submit(signal);
     }
 
     fn shutdown(&self, wait: bool) {
         self.stop_once.call_once(|| {
             // Unpause any paused workers. If we aren't paused, this is essentially a no-op.
             self.resume();
-
             // Acquire pause lock to wait for any pauses in progress to complete
             let pause_lock = safe_lock(&self.paused);
-            self.set_stopped(true);
+            self.stopped.store(true, Ordering::SeqCst);
             drop(pause_lock);
-
             // Let dispatcher know if it should process it's waiting queue before exiting.
             self.dispatcher.set_is_waiting(wait);
-
             // Close the task channel.
-            if let Some(task_sender) = safe_lock(&self.task_sender).take() {
-                drop(task_sender);
-            }
+            self.dispatcher.close_task_channel();
         });
 
         // Wait for the dispatcher thread to end before continuing

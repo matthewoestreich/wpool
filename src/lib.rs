@@ -11,7 +11,6 @@ pub(crate) type Task = Box<dyn FnOnce() + Send + 'static>;
 pub(crate) enum Signal {
     NewTask(Task),
     Pause(std::sync::Arc<crate::pauser::Pauser>),
-    Terminate,
 }
 
 // Allows us to easily lock a Mutex while handling possible poison.
