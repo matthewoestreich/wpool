@@ -1,43 +1,9 @@
-#![allow(dead_code)]
 use std::sync::{
     Arc, Mutex,
     mpsc::{self, RecvError},
 };
 
 use crate::safe_lock;
-
-/// Does not modify either the sending or receiving end of
-/// the channel. This is a convenience wrapper - you get both
-/// the raw `mpsc::Sender<T>` and raw `mpsc::Receiver<T>`.
-pub(crate) struct Channel<T> {
-    pub(crate) sender: mpsc::Sender<T>,
-    pub(crate) receiver: mpsc::Receiver<T>,
-}
-
-impl<T> Channel<T> {
-    pub(crate) fn new() -> Self {
-        let (sender, receiver) = mpsc::channel();
-        Self { sender, receiver }
-    }
-}
-
-/// Does NOT modify the sender half of the channel, you get
-/// the raw `mpsc::SyncSender<T>`.
-/// Wraps the receiving half of the channel in `Arc<Mutex<mpsc::Receiver<T>>>`.
-pub(crate) struct ShareSyncChannel<T> {
-    pub(crate) sender: mpsc::SyncSender<T>,
-    pub(crate) receiver: Arc<Mutex<mpsc::Receiver<T>>>,
-}
-
-impl<T> ShareSyncChannel<T> {
-    pub(crate) fn new(bound: usize) -> Self {
-        let (sender, rx) = mpsc::sync_channel(bound);
-        Self {
-            sender,
-            receiver: Mutex::new(rx).into(),
-        }
-    }
-}
 
 /// Does NOT modify the sender half of the channel, you get
 /// the raw `mpsc::Sender<T>`.
