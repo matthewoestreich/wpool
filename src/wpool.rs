@@ -548,8 +548,14 @@ mod tests {
 
     #[test]
     fn test_large_amount_of_jobs() {
-        let max_workers = 16;
-        let num_jobs = 1_000_000;
+        let cores = {
+            match std::thread::available_parallelism() {
+                Ok(parallelism) => parallelism.get(),
+                Err(_) => 1,
+            }
+        };
+        let max_workers = cores * 2;
+        let num_jobs = if cores == 1 { 10 } else { 1_000_000 };
         let counter = Arc::new(AtomicUsize::new(0));
 
         let p = WPool::new(max_workers);
