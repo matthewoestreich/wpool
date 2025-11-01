@@ -119,14 +119,15 @@ impl Dispatcher {
                 let mut workers = lock_safe(&dispatcher.workers);
 
                 if workers.len() < dispatcher.max_workers {
-                    let id = get_next_id();
-                    let worker_channel_receiver = Arc::clone(&dispatcher.worker_channel.receiver);
-
-                    if let Some(worker_status_sender) =
-                        lock_safe(&dispatcher.worker_status_sender).clone()
+                    if let Some(ref worker_status_sender) =
+                        *lock_safe(&dispatcher.worker_status_sender)
                     {
-                        let worker =
-                            Worker::spawn(id, worker_channel_receiver, worker_status_sender);
+                        let id = get_next_id();
+                        let worker = Worker::spawn(
+                            id,
+                            Arc::clone(&dispatcher.worker_channel.receiver),
+                            worker_status_sender.clone(),
+                        );
                         workers.insert(id, worker);
                     }
 
