@@ -169,9 +169,7 @@ impl Dispatcher {
     }
 
     pub(crate) fn submit(&self, signal: Signal) {
-        if let Some(ref sender) = *safe_lock(&self.task_channel.sender) {
-            let _ = sender.send(signal);
-        }
+        self.task_channel.send(signal);
     }
 
     pub(crate) fn close_task_channel(&self) {
@@ -231,10 +229,7 @@ impl Dispatcher {
     }
 
     fn kill_all_workers(&self) {
-        // Close the workers channel.
-        if let Some(workers_channel) = safe_lock(&self.worker_channel.sender).take() {
-            drop(workers_channel);
-        }
+        self.worker_channel.close();
         // Block until all worker threads have ended.
         for (_, mut worker) in safe_lock(&self.workers).drain() {
             worker.join();

@@ -78,7 +78,7 @@ impl<T> OptionShareChannel<T> {
         if let Some(sender) = safe_lock(&self.sender).as_ref() {
             return sender.send(element).is_ok();
         }
-        true
+        false
     }
 
     pub(crate) fn recv(&self) -> Result<T, RecvError> {
