@@ -48,7 +48,7 @@ impl WPool {
     where
         F: FnOnce() + Send + 'static,
     {
-        self.submit_signal(Signal::Task(Box::new(f)));
+        self.submit_signal(Signal::NewTask(Box::new(f)));
     }
 
     // Enqueues the given function and waits for it to be executed.
@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn test_idle_worker() {
         let max_workers = 3;
-        let num_jobs = max_workers as u32;
+        let num_jobs = max_workers + 1;
         let job_sleep_dur = Duration::from_millis(10);
         let counter = Arc::new(AtomicUsize::new(0));
         let p = WPool::new(max_workers);
@@ -280,14 +280,10 @@ mod tests {
             });
         }
 
-        // give jobs enough time to finish
-        thread::sleep((num_jobs + 1) * job_sleep_dur);
-        // give workers enough time to go idle
-        thread::sleep(WORKER_IDLE_TIMEOUT);
-        println!("{:?}", lock_safe(&p.dispatcher.workers));
-        thread::sleep(WORKER_IDLE_TIMEOUT);
-        thread::sleep(WORKER_IDLE_TIMEOUT);
-        println!("{:?}", lock_safe(&p.dispatcher.workers));
+        // Ensure all workers have passed the timeout
+        thread::sleep((WORKER_IDLE_TIMEOUT * (max_workers as u32)) + Duration::from_millis(250));
+        p.stop_wait();
+        assert_eq!(lock_safe(&p.dispatcher.workers).len(), 0);
     }
 
     #[test]
@@ -573,8 +569,8 @@ mod tests {
 
     #[test]
     fn test_large_amount_of_workers_and_jobs() {
-        let max_workers = 4_100;
-        let num_jobs = max_workers + 1;
+        let max_workers = 2_000;
+        let num_jobs = 2_000_000;
         let counter = Arc::new(AtomicUsize::new(0));
 
         let p = WPool::new(max_workers);

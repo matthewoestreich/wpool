@@ -1,1 +1,1 @@
-pub(crate) type TaskFn = Box<dyn FnOnce() + Send + 'static>;
+pub(crate) type Task = Box<dyn FnOnce() + Send + 'static>;

@@ -1,8 +1,8 @@
-use crate::{pauser::Pauser, task::TaskFn};
+use crate::{pauser::Pauser, task::Task};
 use std::sync::Arc;
 
 pub(crate) enum Signal {
-    Task(TaskFn),
+    NewTask(Task),
     Pause(Arc<Pauser>),
     Terminate,
 }
