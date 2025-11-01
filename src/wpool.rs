@@ -8,8 +8,8 @@ use crate::{
     Signal,
     channel::{Channel, ThreadedChannel},
     dispatcher::Dispatcher,
-    safe_lock,
     pauser::Pauser,
+    safe_lock,
 };
 
 pub struct WPool {
