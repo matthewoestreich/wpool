@@ -123,13 +123,10 @@ impl Dispatcher {
                     let worker_channel_receiver = Arc::clone(&dispatcher.worker_channel.receiver);
 
                     if let Some(worker_status_sender) =
-                        lock_safe(&dispatcher.worker_status_sender).as_ref()
+                        lock_safe(&dispatcher.worker_status_sender).clone()
                     {
-                        let worker = Worker::spawn(
-                            id,
-                            worker_channel_receiver,
-                            worker_status_sender.clone(),
-                        );
+                        let worker =
+                            Worker::spawn(id, worker_channel_receiver, worker_status_sender);
                         workers.insert(id, worker);
                     }
 
