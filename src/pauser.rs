@@ -5,7 +5,6 @@ use crate::{channel::ThreadedChannel, lock_safe};
 //
 // Pauser is a 'quality-of-life' wrapper to simplify thread sync between
 // a controller thread and one (or many) non-controller (worker) threads.
-// It is meant to be a thread-safe shared struct.
 //
 // You still need to handle the 'paused' logic on your non-controller threads.
 // This doesn't just magically pause a thread.
