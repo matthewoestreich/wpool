@@ -17,7 +17,7 @@ use crate::{Signal, channel::ThreadedChannel, safe_lock, worker::Worker};
 // ```
 fn monotonic_counter() -> Box<dyn Fn() -> usize + Send + 'static> {
     let next = AtomicUsize::new(0);
-    Box::new(move || next.fetch_add(1, Ordering::Acquire))
+    Box::new(move || next.fetch_add(1, Ordering::SeqCst))
 }
 
 //
