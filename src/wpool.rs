@@ -31,10 +31,10 @@ impl WPool {
         Self {
             dispatcher: dispatcher.spawn(task_channel.receiver),
             max_workers,
-            paused: Mutex::new(false),
+            paused: false.into(),
             pauser: Pauser::new(),
             stop_once: Once::new(),
-            stopped: AtomicBool::new(false),
+            stopped: false.into(),
             task_sender: Some(task_channel.sender).into(),
         }
     }
