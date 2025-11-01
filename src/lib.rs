@@ -6,13 +6,11 @@ mod wpool;
 
 pub use wpool::WPool;
 
-use std::sync::Arc;
-
 pub(crate) type Task = Box<dyn FnOnce() + Send + 'static>;
 
 pub(crate) enum Signal {
     NewTask(Task),
-    Pause(Arc<crate::pauser::Pauser>),
+    Pause(std::sync::Arc<crate::pauser::Pauser>),
     Terminate,
 }
 
