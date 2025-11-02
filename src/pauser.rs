@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use crate::{channel::ThreadSafeChannel, safe_lock};
+use crossbeam_channel::{Receiver, Sender, unbounded};
+
+use crate::Channel;
 
 //
 // Pauser is a 'quality-of-life' wrapper to simplify thread sync between
@@ -49,17 +51,19 @@ use crate::{channel::ThreadSafeChannel, safe_lock};
 //      }
 //      ```
 //
-#[derive(Clone)]
 pub(crate) struct Pauser {
-    ack_chan: ThreadSafeChannel<()>,
-    pause_chan: ThreadSafeChannel<()>,
+    ack_chan: Channel<Sender<()>, Receiver<()>>,
+    pause_chan: Channel<Sender<()>, Receiver<()>>,
 }
 
 impl Pauser {
     pub(crate) fn new() -> Arc<Self> {
+        let (ack_tx, ack_rx) = unbounded();
+        let (pause_tx, pause_rx) = unbounded();
+
         Arc::new(Self {
-            ack_chan: ThreadSafeChannel::new(),
-            pause_chan: ThreadSafeChannel::new(),
+            ack_chan: Channel::new(ack_tx, ack_rx),
+            pause_chan: Channel::new(pause_tx, pause_rx),
         })
     }
 
@@ -68,13 +72,13 @@ impl Pauser {
     // blocks until controller thread sends the resume message.
     pub(crate) fn pause_this_thread(&self) {
         let _ = self.ack_chan.sender.send(());
-        let _ = safe_lock(&self.pause_chan.receiver).recv();
+        let _ = self.pause_chan.receiver.recv();
     }
 
     // Call from controller thread.
     // Blocks until non-controller thread tells us they are paused.
     pub(crate) fn recv_ack(&self) {
-        let _ = safe_lock(&self.ack_chan.receiver).recv();
+        let _ = self.ack_chan.receiver.recv();
     }
 
     // Call from controller thread.
