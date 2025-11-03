@@ -50,7 +50,7 @@ impl WPool {
     // Enqueues the given function and waits for it to be executed.
     pub fn submit_wait<F>(&self, f: F)
     where
-        F: Fn() + Send + Sync + 'static,
+        F: Fn() + Send + 'static,
     {
         let (sender, receiver) = mpsc::channel::<()>();
         self.submit(move || {
