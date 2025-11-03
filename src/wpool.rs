@@ -595,6 +595,7 @@ mod tests {
         let mut failed_iterations: Vec<(usize, String)> = Vec::new();
         let mut max = 0;
         for i in 0..num_runs {
+            println!("\n\n\n\n\nJOB {i}\n\n\n\n");
             let result = panic::catch_unwind(waiting_queue_len_race);
             #[allow(clippy::single_match)]
             match result {
@@ -605,6 +606,7 @@ mod tests {
                     } else {
                         failed_iterations.push((i, "-".to_string()));
                     }
+                    break;
                 }
                 Ok(thread_max) => {
                     if max < thread_max {
@@ -612,6 +614,8 @@ mod tests {
                     }
                 }
             }
+
+            thread::sleep(Duration::from_millis(1));
         }
         println!("\n\nMAX : {max}\n\n");
         assert!(
@@ -679,6 +683,8 @@ mod tests {
             final_max < num_threads * num_jobs,
             "should not have seen all tasks on waiting queue"
         );
+        println!("\n\n\n\n");
+        wp.stop_wait();
         final_max
     }
 
