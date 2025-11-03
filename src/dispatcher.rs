@@ -16,6 +16,10 @@ use crate::{
     worker::{Worker, WorkerStatus},
 };
 
+fn log(s: &str) {
+    crate::printlnc(s, colored::Color::BrightMagenta);
+}
+
 //
 // Dispatcher is meant to route signals to workers, spawn and/or kil workers,
 // listen for any status updates from workers, and holds the 'source-of-truth'
@@ -109,12 +113,12 @@ impl Dispatcher {
 
                 // At max workers
                 if dispatcher.workers_len() >= dispatcher.max_workers {
-                    println!("dispatcher -> at max workers, putting signal in wait queue");
+                    log("dispatcher -> at max workers, putting signal in wait queue");
                     dispatcher.waiting_queue_push_back(signal);
                     continue;
                 }
 
-                println!("dispatcher -> not at max workers, spawning");
+                log("dispatcher -> not at max workers, spawning");
 
                 if let Some(status_sender) = dispatcher.worker_status_channel.clone_sender() {
                     let id = get_next_id();
@@ -135,12 +139,12 @@ impl Dispatcher {
                 dispatcher.run_queued_tasks();
             }
 
-            println!("    dispatcher -> killing all workers");
+            log("    dispatcher -> killing all workers");
             dispatcher.kill_all_workers();
-            println!("    dispatcher -> closing worker status channel.");
+            log("    dispatcher -> closing worker status channel.");
             dispatcher.worker_status_channel.close();
             let _ = worker_status_handle.join();
-            println!("    dispatcher -> exiting dispatch thread");
+            log("    dispatcher -> exiting dispatch thread");
         }));
 
         self
@@ -219,83 +223,31 @@ impl Dispatcher {
 
     fn kill_all_workers(&self) {
         let mut workers = safe_lock(&self.workers);
-        println!("[kill_workers] sending kill signal to all workers");
+        log("dispatcher -> kill_workers -> sending kill signal to all workers");
         // Send kill signal to workers as they become available
         for _ in workers.iter() {
-            println!("    [kill_workers] BEFFORE -> ab to send kill signal");
             // Will block until a ready worker calls recv
-            let send_kill_result = self.worker_channel.send(Signal::Terminate);
-            println!("    [kill_workers] AFTER -> send kill signal result={send_kill_result:?}");
+            let _ = self.worker_channel.send(Signal::Terminate);
         }
-        println!("[kill_workers] joining worker handles");
+        log("dispatcher -> kill_workers -> joining worker handles");
         for (_, mut worker) in workers.drain() {
             worker.join();
         }
-        println!("[kill_workers] all workers should be dead");
+        log("   dispatcher -> kill_workers -> all workers should be dead");
     }
-
-    /*
-    fn process_waiting_queue(&self) -> bool {
-        use crossbeam_channel::Select;
-
-        let task_receiver = self.task_channel.clone_receiver();
-        let worker_sender = if let Some(sender) = self.worker_channel.clone_sender() {
-            sender
-        } else {
-            println!("proc_wait_que -> ERROR -> unable to acquire worker_sender from self! Exiting");
-            return false;
-        };
-
-        let mut cb_select = Select::new();
-        let task_ready = cb_select.recv(&task_receiver);
-        let worker_ready = cb_select.send(&worker_sender);
-
-        // Try select without blocking
-        match cb_select.try_select() {
-            Ok(operation) => {
-                if operation.index() == task_ready {
-                    println!("proc_wait_que -> task_ready | wait_que_len={}", self.waiting_queue_len());
-                    // Got new task
-                    if let Ok(signal) = operation.recv(&task_receiver) {
-                        println!("    proc_wait_que -> task_ready | task -> wait_queue | wait_que_len={}", self.waiting_queue_len());
-                        self.waiting_queue_push_back(signal);
-                        return true;
-                    }
-                    println!("    proc_wait_que -> task_ready | could not get task, continuing | wait_que_len={}", self.waiting_queue_len());
-                } else if operation.index() == worker_ready {
-                    println!("    proc_wait_que -> worker_ready | wait_que_len={}", self.waiting_queue_len());
-                    // Can send waiting signal to worker
-                    if let Some(signal) = self.waiting_queue_pop_front() {
-                        println!("    proc_wait_que -> worker_ready | wait_que -> worker_chan | wait_que_len={}", self.waiting_queue_len());
-                        let _ = operation.send(&worker_sender, signal);
-                        return true;
-                    }
-                    println!("    proc_wait_que -> worker_ready | nothing in wait queue, continuing | wait_que_len={}", self.waiting_queue_len());
-                }
-                println!("    proc_wait_que -> RETURNING FALSE | wait_que_len={}", self.waiting_queue_len());
-                false
-            }
-            Err(_) => {
-                // Nothing ready
-                println!("proc_wait_que -> NEITHER TASK OR WORKER CHAN READY, RETURNING FALSE | wait_que_len={}", self.waiting_queue_len());
-                false
-            },
-        }
-    }
-    */
 
     fn process_waiting_queue(&self) -> bool {
         match self.task_channel.try_recv() {
             Ok(signal) => {
-                println!(
+                log(&format!(
                     "process_wait_queue -> got signal! start | wait queue size = {}",
                     self.waiting_queue_len()
-                );
+                ));
                 self.waiting_queue_push_back(signal);
-                println!(
+                log(&format!(
                     "    process_wait_queue -> got signal! end : (sent sgnal from task chan to wait que) | wait queue size = {}",
                     self.waiting_queue_len()
-                );
+                ));
             }
             Err(crossbeam_channel::TryRecvError::Empty) => {
                 // Something exists in wait queue
@@ -306,32 +258,32 @@ impl Dispatcher {
                         .is_ok()
                     {
                         let _ = self.waiting_queue_pop_front();
-                        println!(
+                        log(&format!(
                             "    process_wait_queue -> task channel empty -> worker ready! start : popped_front on wait queue | wait queue size = {}",
                             self.waiting_queue_len()
-                        );
+                        ));
                         return true;
                     }
-                    println!(
+                    log(&format!(
                         "process_wait_queue -> worker channel is closed! | wait queue size = {}",
                         self.waiting_queue_len()
-                    );
+                    ));
                 }
-                println!("    process_wait_queue -> nothing in wait queue...");
+                log("    process_wait_queue -> nothing in wait queue...");
             }
             Err(_) => {
                 // Task channel closed
-                println!(
+                log(&format!(
                     "process_wait_queue -> RETURNING FALSE -> task channel closed | wait queue size = {}",
                     self.waiting_queue_len()
-                );
+                ));
                 return false;
             }
         }
-        println!(
+        log(&format!(
             "process_wait_queue -> at end RETURNING TRUE | wait queue size = {}",
             self.waiting_queue_len()
-        );
+        ));
         true
     }
 

@@ -7,6 +7,15 @@ mod wpool;
 
 pub use wpool::WPool;
 
+// Colorized logging...
+// Env var "WPCOLOR" must exist (with any value) to enabe..
+pub(crate) fn printlnc<T: std::fmt::Display>(value: T, color: colored::Color) {
+    if std::env::var("WPCOLOR").is_ok() {
+        use colored::Colorize;
+        println!("{}", value.to_string().color(color));
+    }
+}
+
 // Allows us to easily lock a Mutex while handling possible poison.
 pub(crate) fn safe_lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     match m.lock() {
