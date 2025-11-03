@@ -4,12 +4,6 @@ use crate::job::Signal;
 
 pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
-fn log(s: &str) {
-    // Orange 255, 157, 0
-    // dark green 0, 102, 0
-    crate::printlnc(s, colored::Color::TrueColor { r: 0, g: 102, b: 0 });
-}
-
 pub(crate) enum WorkerStatus {
     Terminating(usize),
 }
@@ -32,31 +26,14 @@ impl Worker {
 
                 while maybe_signal.is_some() {
                     match maybe_signal.unwrap() {
-                        Signal::NewTask(task) => {
-                            log(&format!("worker:{id} -> got task signal to run!"));
-                            task.run();
-                        }
-                        Signal::Pause(pauser) => {
-                            log(&format!("worker:{id} -> got pause signal"));
-                            pauser.pause_this_thread();
-                            log(&format!("    worker:{id} -> has resumed from pause!"));
-                        }
-                        Signal::Terminate => {
-                            log("worker:{id} -> got terminate signal");
-                            break;
-                        }
+                        Signal::NewTask(task) => task.run(),
+                        Signal::Pause(pauser) => pauser.pause_this_thread(),
+                        Signal::Terminate => break,
                     }
-
                     maybe_signal = match worker_channel_receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
                         Ok(signal) => Some(signal),
-                        Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                            log(&format!("worker:{id} -> timed out, exiting."));
-                            break;
-                        }
-                        Err(_) => {
-                            log(&format!("worker:{id} -> worker channel closed, exiting."));
-                            break;
-                        }
+                        Err(crossbeam_channel::RecvTimeoutError::Timeout) => break,
+                        Err(_) => break,
                     };
                 }
 
