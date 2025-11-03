@@ -5,4 +5,3 @@ edition = "2024"
 
 [dependencies]
 crossbeam-channel = "0.5.15"
-colored = "3.0.0"

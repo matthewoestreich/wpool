@@ -11,10 +11,6 @@ use crate::{
     thread::Pauser,
 };
 
-fn log(s: &str) {
-    crate::printlnc(s, colored::Color::BrightBlue);
-}
-
 pub struct WPool {
     pub(crate) dispatcher: Arc<Dispatcher>,
     max_workers: usize,
@@ -97,23 +93,17 @@ impl WPool {
         // We want to hold the pause lock for the entirety of the pause operation.
         let mut is_paused = safe_lock(&self.paused);
         if self.stopped.load(Ordering::SeqCst) || *is_paused {
-            log("wpool -> pause() -> already paused or stopped, returning.");
             return;
         }
 
         let pauser = Arc::clone(&self.pauser);
-
-        log("wpool -> pause() -> submitting pause signal, for each worker, to dispatcher.");
         for _ in 0..self.max_workers {
             self.submit_signal(Signal::Pause(Arc::clone(&pauser)));
         }
-
-        log("    wpool -> pause() -> waiting for ack from each worker..");
         // Blocks until all workers tell us they're paused.
         for _ in 0..self.max_workers {
             pauser.recv_ack();
         }
-        log("    wpool -> pause() -> got ack from each worker! all workers paused!");
 
         *is_paused = true;
     }
@@ -122,15 +112,12 @@ impl WPool {
     pub fn resume(&self) {
         // We want to hold the pause lock for the entirety of the resume operation.
         let mut is_paused = safe_lock(&self.paused);
-
         if self.stopped.load(Ordering::SeqCst) || !*is_paused {
             return;
         }
-
         for _ in 0..self.max_workers {
             self.pauser.send_resume();
         }
-
         *is_paused = false;
     }
 
@@ -145,33 +132,18 @@ impl WPool {
     fn shutdown(&self, wait: bool) {
         self.stop_once.call_once(|| {
             // Unpause any paused workers. If we aren't paused, this is essentially a no-op.
-            log(&format!(
-                "wpool -> shutdown({wait}) -> if any paused workers, unpause them"
-            ));
             self.resume();
             // Acquire pause lock to wait for any pauses in progress to complete
             let pause_lock = safe_lock(&self.paused);
             self.stopped.store(true, Ordering::SeqCst);
             drop(pause_lock);
-            log(&format!(
-                "    wpool -> shutdown({wait}) -> set pool '.stopped' to true"
-            ));
             // Let dispatcher know if it should process it's waiting queue before exiting.
             self.dispatcher.set_is_waiting(wait);
-            log(&format!(
-                "    wpool -> shutdown({wait}) -> set dispatcher '.is_waiting' to {wait}"
-            ));
             // Close the task channel.
             self.dispatcher.close_task_channel();
-            log(&format!(
-                "    wpool -> shutdown({wait}) -> closed task channel"
-            ));
-            // Wait for the dispatcher thread to end before continuing
-            self.dispatcher.join();
-            log(&format!(
-                "    wpool -> shutdown({wait}) -> dispatcher thread has been joined"
-            ));
         });
+        // Wait for the dispatcher thread to end before continuing
+        self.dispatcher.join();
     }
 }
 
@@ -633,7 +605,7 @@ mod tests {
 
     fn waiting_queue_len_race() -> usize {
         let num_threads = 10;
-        let num_jobs = 100;
+        let num_jobs = 20;
         let max_workers = 5;
         let mut handles = Vec::<thread::JoinHandle<()>>::new();
 

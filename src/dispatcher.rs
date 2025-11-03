@@ -16,10 +16,6 @@ use crate::{
     worker::{Worker, WorkerStatus},
 };
 
-fn log(s: &str) {
-    crate::printlnc(s, colored::Color::BrightMagenta);
-}
-
 //
 // Dispatcher is meant to route signals to workers, spawn and/or kil workers,
 // listen for any status updates from workers, and holds the 'source-of-truth'
@@ -85,7 +81,9 @@ impl Dispatcher {
         // if it did not receive a signal within the timeout duration.
         let worker_status_handle = thread::spawn(move || {
             while let Ok(WorkerStatus::Terminating(id)) = handler.worker_status_channel.recv() {
-                handler.workers_remove_and_join(&id);
+                if let Some(mut worker) = handler.remove_worker_from_cache(&id) {
+                    worker.join();
+                }
             }
         });
 
@@ -113,16 +111,13 @@ impl Dispatcher {
 
                 // At max workers
                 if dispatcher.workers_len() >= dispatcher.max_workers {
-                    log("dispatcher -> at max workers, putting signal in wait queue");
                     dispatcher.waiting_queue_push_back(signal);
                     continue;
                 }
 
-                log("dispatcher -> not at max workers, spawning");
-
                 if let Some(status_sender) = dispatcher.worker_status_channel.clone_sender() {
                     let id = get_next_id();
-                    dispatcher.workers_insert(
+                    dispatcher.add_worker_to_cache(
                         id,
                         Worker::spawn(
                             id,
@@ -139,12 +134,9 @@ impl Dispatcher {
                 dispatcher.run_queued_tasks();
             }
 
-            log("    dispatcher -> killing all workers");
             dispatcher.kill_all_workers();
-            log("    dispatcher -> closing worker status channel.");
             dispatcher.worker_status_channel.close();
             let _ = worker_status_handle.join();
-            log("    dispatcher -> exiting dispatch thread");
         }));
 
         self
@@ -207,83 +199,47 @@ impl Dispatcher {
         safe_lock(&self.workers).is_empty()
     }
 
-    fn workers_insert(&self, id: usize, worker: Worker) -> Option<Worker> {
+    fn add_worker_to_cache(&self, id: usize, worker: Worker) -> Option<Worker> {
         safe_lock(&self.workers).insert(id, worker)
     }
 
-    fn workers_remove(&self, element: &usize) -> Option<Worker> {
+    fn remove_worker_from_cache(&self, element: &usize) -> Option<Worker> {
         safe_lock(&self.workers).remove(element)
-    }
-
-    fn workers_remove_and_join(&self, id: &usize) {
-        if let Some(mut worker) = self.workers_remove(id) {
-            worker.join();
-        }
     }
 
     fn kill_all_workers(&self) {
         let mut workers = safe_lock(&self.workers);
-        log("dispatcher -> kill_workers -> sending kill signal to all workers");
         // Send kill signal to workers as they become available
         for _ in workers.iter() {
             // Will block until a ready worker calls recv
             let _ = self.worker_channel.send(Signal::Terminate);
         }
-        log("dispatcher -> kill_workers -> joining worker handles");
+        // Join worker threads, will block until all workers have finished.
         for (_, mut worker) in workers.drain() {
             worker.join();
         }
-        log("   dispatcher -> kill_workers -> all workers should be dead");
     }
 
     fn process_waiting_queue(&self) -> bool {
         match self.task_channel.try_recv() {
             Ok(signal) => {
-                log(&format!(
-                    "process_wait_queue -> got signal! start | wait queue size = {}",
-                    self.waiting_queue_len()
-                ));
                 self.waiting_queue_push_back(signal);
-                log(&format!(
-                    "    process_wait_queue -> got signal! end : (sent sgnal from task chan to wait que) | wait queue size = {}",
-                    self.waiting_queue_len()
-                ));
             }
             Err(crossbeam_channel::TryRecvError::Empty) => {
                 // Something exists in wait queue
-                if self.waiting_queue_front().is_some() {
-                    if self
+                if self.waiting_queue_front().is_some()
+                    && self
                         .worker_channel
-                        .send(self.waiting_queue_front().expect("already checked"))
+                        .send(self.waiting_queue_front().expect("is_some verified"))
                         .is_ok()
-                    {
-                        let _ = self.waiting_queue_pop_front();
-                        log(&format!(
-                            "    process_wait_queue -> task channel empty -> worker ready! start : popped_front on wait queue | wait queue size = {}",
-                            self.waiting_queue_len()
-                        ));
-                        return true;
-                    }
-                    log(&format!(
-                        "process_wait_queue -> worker channel is closed! | wait queue size = {}",
-                        self.waiting_queue_len()
-                    ));
+                {
+                    let _ = self.waiting_queue_pop_front();
+                    return true;
                 }
-                log("    process_wait_queue -> nothing in wait queue...");
             }
-            Err(_) => {
-                // Task channel closed
-                log(&format!(
-                    "process_wait_queue -> RETURNING FALSE -> task channel closed | wait queue size = {}",
-                    self.waiting_queue_len()
-                ));
-                return false;
-            }
+            Err(_) => return false,
         }
-        log(&format!(
-            "process_wait_queue -> at end RETURNING TRUE | wait queue size = {}",
-            self.waiting_queue_len()
-        ));
+
         true
     }
 

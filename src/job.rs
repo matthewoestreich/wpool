@@ -11,13 +11,11 @@ pub(crate) struct Task {
 impl Task {
     pub fn new(f: TaskFn) -> Self {
         let f = Mutex::new(Some(f));
-
         let inner = Arc::new(move || {
             if let Some(f) = safe_lock(&f).take() {
                 f();
             }
         });
-
         Task { inner }
     }
 
