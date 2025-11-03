@@ -1,7 +1,6 @@
 use std::sync::{
     Arc, Mutex, Once,
     atomic::{AtomicBool, Ordering},
-    mpsc::{self},
 };
 
 use crate::{
@@ -50,9 +49,9 @@ impl WPool {
     // Enqueues the given function and waits for it to be executed.
     pub fn submit_wait<F>(&self, f: F)
     where
-        F: Fn() + Send + 'static,
+        F: FnOnce() + Send + 'static,
     {
-        let (sender, receiver) = mpsc::channel::<()>();
+        let (sender, receiver) = crossbeam_channel::bounded(0);
         self.submit(move || {
             f();
             let _ = sender.send(());
