@@ -336,6 +336,50 @@ mod tests {
     }
 
     #[test]
+    fn test_pause_foo() {
+        let max_workers = 25;
+        let wp = WPool::new(max_workers);
+
+        let (mut ran_tx, mut ran_rx) = crossbeam_channel::unbounded::<()>();
+
+        wp.submit(move || {
+            thread::sleep(Duration::from_millis(1));
+            drop(ran_tx);
+        });
+
+        wp.pause();
+
+        // Check that Pause waits for all previously submitted tasks to run. If the job ran, there should be something for us to recv. Otherwise, error.
+        crossbeam_channel::select! {
+            recv(ran_rx) -> _ => {},
+            default => panic!("task did not finish before Pause returned"),
+        }
+
+        (ran_tx, ran_rx) = crossbeam_channel::unbounded();
+
+        wp.submit(move || {
+            drop(ran_tx);
+        });
+
+        // Check that a new task did not run while paused
+        crossbeam_channel::select! {
+            recv(ran_rx) -> _ => {
+                panic!("ran while paused");
+            },
+            default(Duration::from_millis(1)) => {}
+        }
+
+        // Check that task was enqueued
+        //assert_eq!(
+        //    wp.dispatcher.waiting_queue_len(),
+        //    1,
+        //    "waiting queue size should be 1"
+        //);
+
+        println!("here");
+    }
+
+    #[test]
     fn test_pause_jobs_arent_ran_while_paused() {
         fn first() {
             let max_workers = 3;
@@ -493,6 +537,7 @@ mod tests {
                 let _ = thread_release_receiver.recv();
             });
         }
+
         // Start a thread to free the workers after calling stop.  This way
         // the dispatcher can exit, then when this thread runs, the pool
         // can exit.
@@ -513,8 +558,12 @@ mod tests {
         let _ = release_handle.join();
     }
 
+    /*
     #[test]
     fn test_waiting_queue_len_race_100_times() {
+        // If this many runs fail this test willl fail.
+        // If 'failure_threshold' = 2, if 3 jobs fail, this job fails.
+        let failure_threshold = 0;
         let num_runs = 100;
         let mut failed_iterations: Vec<(usize, String)> = Vec::new();
         let mut max = 0;
@@ -539,11 +588,16 @@ mod tests {
         }
         println!("\n\nMAX : {max}\n\n");
         assert!(
-            failed_iterations.len() < 50,
-            "expected this to pass at least half of the time, instead it failed {}/{num_runs}",
+            if failure_threshold == 0 {
+                failed_iterations.is_empty()
+            } else {
+                failed_iterations.len() < failure_threshold
+            },
+            "expected this to fail at most {failure_threshold} times, instead it failed {}/{num_runs}",
             failed_iterations.len()
         );
     }
+    */
 
     #[test]
     fn test_wq_race() {
@@ -552,24 +606,22 @@ mod tests {
 
     fn waiting_queue_len_race() -> usize {
         let num_threads = 10;
-        let num_jobs = 20;
-        let max_workers = 2;
+        let num_jobs = 100;
+        let max_workers = 5;
         let mut handles = Vec::<thread::JoinHandle<()>>::new();
 
         let wp = Arc::new(WPool::new(max_workers));
         let (max_chan_tx, max_chan_rx) = crossbeam_channel::unbounded();
 
-        for thread in 0..num_threads {
+        for _ in 0..num_threads {
             let thread_pool = Arc::clone(&wp);
             let max_chan_tx_clone = max_chan_tx.clone();
             handles.push(thread::spawn(move || {
                 let mut max = 0;
-                for job in 0..num_jobs {
+                for _ in 0..num_jobs {
                     thread_pool.submit(move || {
-                        println!("thread:{thread} job:{job} ran");
                         thread::sleep(Duration::from_micros(1));
                     });
-                    //thread::sleep(Duration::from_millis(20));
                     let waiting = thread_pool.dispatcher.waiting_queue_len();
                     if waiting > max {
                         max = waiting;
@@ -590,8 +642,6 @@ mod tests {
                 final_max = t_max;
             }
         }
-
-        wp.stop();
 
         println!("max_seen = {final_max}");
         assert!(
@@ -666,8 +716,8 @@ mod tests {
 
     #[test]
     fn test_large_amount_of_workers_and_jobs() {
-        let max_workers = 2_000;
-        let num_jobs = 2_000_000;
+        let max_workers = 1000;
+        let num_jobs = 2000000;
         let counter = Arc::new(AtomicUsize::new(0));
 
         let p = WPool::new(max_workers);

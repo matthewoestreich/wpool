@@ -7,7 +7,7 @@ use std::{
     thread,
 };
 
-use crossbeam_channel::{Receiver, RecvError, Sender, TryRecvError, bounded, unbounded};
+use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 
 use crate::{
     Channel, Signal, monotonic_counter, safe_lock,
@@ -102,36 +102,32 @@ impl Dispatcher {
                     continue;
                 }
 
-                // Blocks until we get a task or the task channel is closed.
                 let signal = match dispatcher.task_channel.receiver.recv() {
                     Ok(signal) => signal,
-                    Err(RecvError) => break,
+                    Err(_) => break,
                 };
 
-                if dispatcher.workers_len() < dispatcher.max_workers {
-                    let id = get_next_id();
+                // At max workers
+                if dispatcher.workers_len() >= dispatcher.max_workers {
+                    println!("  dispatcher -> at max workers, putting signal in wait queue");
+                    dispatcher.waiting_queue_push_back(signal);
+                    continue;
+                }
 
-                    if let Some(status_sender) =
-                        safe_lock(&dispatcher.worker_status_channel.sender).clone()
-                    {
-                        let worker = Worker::spawn(
+                println!("  dispatcher -> not at max workers, spawning");
+
+                let status_sender_guard = safe_lock(&dispatcher.worker_status_channel.sender);
+                if let Some(status_sender) = status_sender_guard.clone() {
+                    let id = get_next_id();
+                    dispatcher.workers_insert(
+                        id,
+                        Worker::spawn(
                             id,
                             dispatcher.worker_channel.receiver.clone(),
                             status_sender,
-                        );
-
-                        dispatcher.workers_insert(id, worker);
-                    }
-                    if let Some(worker_sender) =
-                        safe_lock(&dispatcher.worker_channel.sender).as_ref()
-                    {
-                        if worker_sender.send(signal).is_err() {
-                            break;
-                        }
-                    }
-                } else {
-                    // At max workers, put signal in waiting queue.
-                    dispatcher.waiting_queue_push_back(signal);
+                            signal,
+                        ),
+                    );
                 }
             }
 
@@ -140,9 +136,12 @@ impl Dispatcher {
                 dispatcher.run_queued_tasks();
             }
 
+            println!("dispatcher -> killing all workers");
             dispatcher.kill_all_workers();
+            println!("dispatcher -> closing worker status channel.");
             dispatcher.close_worker_status_channel();
             let _ = worker_status_handle.join();
+            println!("exiting dispatchh thread");
         }));
 
         self
@@ -166,6 +165,7 @@ impl Dispatcher {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn close_worker_channel(&self) {
         if let Some(worker_sender) = safe_lock(&self.worker_channel.sender).take() {
             drop(worker_sender);
@@ -174,8 +174,7 @@ impl Dispatcher {
 
     #[allow(dead_code)]
     pub(crate) fn waiting_queue_len(&self) -> usize {
-        let queue = safe_lock(&self.waiting_queue);
-        queue.len()
+        safe_lock(&self.waiting_queue).len()
     }
 
     pub(crate) fn join(&self) {
@@ -194,6 +193,11 @@ impl Dispatcher {
 
     fn waiting_queue_push_back(&self, signal: Signal) {
         safe_lock(&self.waiting_queue).push_back(signal);
+    }
+
+    #[allow(dead_code)]
+    fn waiting_queue_pop_front(&self) -> Option<Signal> {
+        safe_lock(&self.waiting_queue).pop_front()
     }
 
     fn is_waiting_queue_empty(&self) -> bool {
@@ -219,32 +223,54 @@ impl Dispatcher {
     }
 
     fn kill_all_workers(&self) {
-        self.close_worker_channel();
+        println!("[kill_workers] getting workers");
+        let mut workers_guard = safe_lock(&self.workers);
+        let workers: Vec<Worker> = workers_guard.drain().map(|(_, worker)| worker).collect();
+        println!("[kill_workers] drained workers");
+        let workers_sender = safe_lock(&self.worker_channel.sender).clone().unwrap();
+        // Send kill signal to all worker threads.
+        for _ in 0..workers.len() {
+            let _ = workers_sender.send(Signal::Terminate);
+        }
+        println!("[kill_workers] sent kill signal to every worker, ab to join threads");
         // Block until all worker threads have ended.
-        for (_, mut worker) in safe_lock(&self.workers).drain() {
+        for mut worker in workers {
             worker.join();
         }
+        println!("[kill_workers] all workers should be dead");
     }
 
     fn process_waiting_queue(&self) -> bool {
-        match self.task_channel.receiver.try_recv() {
-            Ok(signal) => {
-                let mut wq = safe_lock(&self.waiting_queue);
-                wq.push_back(signal);
-                true
-            }
-            Err(TryRecvError::Empty) => {
-                if let Some(worker_sender) = safe_lock(&self.worker_channel.sender).as_ref() {
-                    let mut wq = safe_lock(&self.waiting_queue);
-                    if let Some(signal) = wq.pop_front() {
-                        let _ = worker_sender.send(signal);
+        println!(
+            "[process_waiting_queue] start : wait_queue_len={}",
+            self.waiting_queue_len()
+        );
+
+        crossbeam_channel::select! {
+            recv(self.task_channel.receiver) -> signal_result => {
+                match signal_result {
+                    Ok(signal) => {
+                        self.waiting_queue_push_back(signal);
+                        //let mut wq = self.waiting_queue.lock().unwrap();
+                        //wq.push_back(signal);
+                        //drop(wq);
                     }
-                    return true;
+                    Err(_) => {
+                        println!("[process_waiting_queue] task channel closed");
+                        return false;
+                    },
                 }
-                false
             }
-            Err(_) => false,
-        }
+            default => {
+                if let Some(signal) = self.waiting_queue_pop_front() {
+                    if let Some(sender) = safe_lock(&self.worker_channel.sender).clone() {
+                        let _ = sender.clone().send(signal);
+                    }
+                }
+            }
+        };
+
+        true
     }
 
     fn run_queued_tasks(&self) {

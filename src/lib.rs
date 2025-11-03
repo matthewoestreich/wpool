@@ -10,6 +10,17 @@ pub(crate) type Task = Box<dyn FnOnce() + Send + 'static>;
 pub(crate) enum Signal {
     NewTask(Task),
     Pause(std::sync::Arc<crate::pauser::Pauser>),
+    Terminate,
+}
+
+impl std::fmt::Debug for Signal {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Signal::NewTask(_) => write!(f, "Signal::NewTask(Task)"),
+            Signal::Pause(_) => write!(f, "Signal::Pause(Pauser)"),
+            Signal::Terminate => write!(f, "Signal::Terminate"),
+        }
+    }
 }
 
 #[derive(Default)]
