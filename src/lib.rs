@@ -1,39 +1,11 @@
+mod channel;
 mod dispatcher;
-mod pauser;
+mod job;
+mod thread;
 mod worker;
 mod wpool;
 
 pub use wpool::WPool;
-
-pub(crate) type Task = Box<dyn FnOnce() + Send + 'static>;
-
-pub(crate) enum Signal {
-    NewTask(Task),
-    Pause(std::sync::Arc<crate::pauser::Pauser>),
-    Terminate,
-}
-
-impl std::fmt::Debug for Signal {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Signal::NewTask(_) => write!(f, "Signal::NewTask(Task)"),
-            Signal::Pause(_) => write!(f, "Signal::Pause(Pauser)"),
-            Signal::Terminate => write!(f, "Signal::Terminate"),
-        }
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct Channel<S, R> {
-    pub(crate) sender: S,
-    pub(crate) receiver: R,
-}
-
-impl<S, R> Channel<S, R> {
-    pub(crate) fn new(sender: S, receiver: R) -> Self {
-        Self { sender, receiver }
-    }
-}
 
 // Allows us to easily lock a Mutex while handling possible poison.
 pub(crate) fn safe_lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {

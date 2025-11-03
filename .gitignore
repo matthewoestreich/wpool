@@ -16,3 +16,4 @@ Cargo.lock
 
 rustc-ice-*.*
 /.vscode/
+cat_to_clipboard.sh

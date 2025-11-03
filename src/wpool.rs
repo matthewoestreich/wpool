@@ -4,7 +4,12 @@ use std::sync::{
     mpsc::{self},
 };
 
-use crate::{Signal, dispatcher::Dispatcher, pauser::Pauser, safe_lock};
+use crate::{
+    dispatcher::Dispatcher,
+    job::{Signal, Task},
+    safe_lock,
+    thread::Pauser,
+};
 
 pub struct WPool {
     pub(crate) dispatcher: Arc<Dispatcher>,
@@ -38,13 +43,14 @@ impl WPool {
     where
         F: FnOnce() + Send + 'static,
     {
-        self.submit_signal(Signal::NewTask(Box::new(f)));
+        let t = Task::new(Box::new(f));
+        self.submit_signal(Signal::NewTask(t));
     }
 
     // Enqueues the given function and waits for it to be executed.
     pub fn submit_wait<F>(&self, f: F)
     where
-        F: FnOnce() + Send + 'static,
+        F: Fn() + Send + Sync + 'static,
     {
         let (sender, receiver) = mpsc::channel::<()>();
         self.submit(move || {
@@ -86,21 +92,24 @@ impl WPool {
     pub fn pause(&self) {
         // We want to hold the pause lock for the entirety of the pause operation.
         let mut is_paused = safe_lock(&self.paused);
-
         if self.stopped.load(Ordering::SeqCst) || *is_paused {
+            println!("wpool -> pause() -> already paused or stopped, returning.");
             return;
         }
 
         let pauser = Arc::clone(&self.pauser);
 
+        println!("wpool -> pause() -> submitting pause signal, for each worker, to dispatcher.");
         for _ in 0..self.max_workers {
             self.submit_signal(Signal::Pause(Arc::clone(&pauser)));
         }
 
+        println!("    wpool -> pause() -> waiting for ack from each worker..");
         // Blocks until all workers tell us they're paused.
         for _ in 0..self.max_workers {
             pauser.recv_ack();
         }
+        println!("    wpool -> pause() -> got ack from each worker! all workers paused!");
 
         *is_paused = true;
     }
@@ -132,19 +141,23 @@ impl WPool {
     fn shutdown(&self, wait: bool) {
         self.stop_once.call_once(|| {
             // Unpause any paused workers. If we aren't paused, this is essentially a no-op.
+            println!("wpool -> shutdown({wait}) -> if any paused workers, unpause them");
             self.resume();
             // Acquire pause lock to wait for any pauses in progress to complete
             let pause_lock = safe_lock(&self.paused);
             self.stopped.store(true, Ordering::SeqCst);
             drop(pause_lock);
+            println!("    wpool -> shutdown({wait}) -> set pool '.stopped' to true");
             // Let dispatcher know if it should process it's waiting queue before exiting.
             self.dispatcher.set_is_waiting(wait);
+            println!("    wpool -> shutdown({wait}) -> set dispatcher '.is_waiting' to {wait}");
             // Close the task channel.
             self.dispatcher.close_task_channel();
+            println!("    wpool -> shutdown({wait}) -> closed task channel");
+            // Wait for the dispatcher thread to end before continuing
+            self.dispatcher.join();
+            println!("    wpool -> shutdown({wait}) -> dispatcher thread has been joined");
         });
-
-        // Wait for the dispatcher thread to end before continuing
-        self.dispatcher.join();
     }
 }
 
@@ -336,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pause_foo() {
+    fn test_pause() {
         let max_workers = 25;
         let wp = WPool::new(max_workers);
 
@@ -370,13 +383,14 @@ mod tests {
         }
 
         // Check that task was enqueued
-        //assert_eq!(
-        //    wp.dispatcher.waiting_queue_len(),
-        //    1,
-        //    "waiting queue size should be 1"
-        //);
+        assert_eq!(
+            wp.dispatcher.waiting_queue_len(),
+            1,
+            "waiting queue size should be 1"
+        );
 
         println!("here");
+        wp.stop();
     }
 
     #[test]

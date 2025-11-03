@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
 
-use crate::Channel;
+use crate::channel::Channel;
 
 //
 // Pauser is a 'quality-of-life' wrapper to simplify thread sync between
@@ -71,19 +71,19 @@ impl Pauser {
     // Lets the controller thread know we are paused and then
     // blocks until controller thread sends the resume message.
     pub(crate) fn pause_this_thread(&self) {
-        let _ = self.ack_chan.sender.send(());
-        let _ = self.pause_chan.receiver.recv();
+        let _ = self.ack_chan.send(());
+        let _ = self.pause_chan.recv();
     }
 
     // Call from controller thread.
     // Blocks until non-controller thread tells us they are paused.
     pub(crate) fn recv_ack(&self) {
-        let _ = self.ack_chan.receiver.recv();
+        let _ = self.ack_chan.recv();
     }
 
     // Call from controller thread.
     // Sends resume message to non-controller thread.
     pub(crate) fn send_resume(&self) {
-        let _ = self.pause_chan.sender.send(());
+        let _ = self.pause_chan.send(());
     }
 }
