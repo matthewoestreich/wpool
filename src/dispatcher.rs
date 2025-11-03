@@ -7,7 +7,7 @@ use std::{
     thread,
 };
 
-use crossbeam_channel::{Receiver, RecvError, Sender, bounded, select, unbounded};
+use crossbeam_channel::{Receiver, RecvError, Sender, TryRecvError, bounded, unbounded};
 
 use crate::{
     Channel, Signal, monotonic_counter, safe_lock,
@@ -172,6 +172,12 @@ impl Dispatcher {
         }
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn waiting_queue_len(&self) -> usize {
+        let queue = safe_lock(&self.waiting_queue);
+        queue.len()
+    }
+
     pub(crate) fn join(&self) {
         if let Some(handle) = safe_lock(&self.handle).take() {
             let _ = handle.join();
@@ -221,40 +227,23 @@ impl Dispatcher {
     }
 
     fn process_waiting_queue(&self) -> bool {
-        let task_receiver = self.task_channel.receiver.clone();
-        let worker_sender_opt = safe_lock(&self.worker_channel.sender);
-        let worker_sender = worker_sender_opt.as_ref().expect("pray");
-
-        // Grab a lock on the waiting queue for pop/front operations
-        let mut wq = safe_lock(&self.waiting_queue);
-
-        // Nothing to send? Return early
-        if wq.is_empty() {
-            match task_receiver.recv() {
-                Ok(signal) => {
-                    wq.push_back(signal);
+        match self.task_channel.receiver.try_recv() {
+            Ok(signal) => {
+                let mut wq = safe_lock(&self.waiting_queue);
+                wq.push_back(signal);
+                true
+            }
+            Err(TryRecvError::Empty) => {
+                if let Some(worker_sender) = safe_lock(&self.worker_channel.sender).as_ref() {
+                    let mut wq = safe_lock(&self.waiting_queue);
+                    if let Some(signal) = wq.pop_front() {
+                        let _ = worker_sender.send(signal);
+                    }
                     return true;
                 }
-                Err(_) => return false, // channel closed
+                false
             }
-        }
-
-        select! {
-            recv(task_receiver) -> got => {
-                match got {
-                    Ok(signal) => {
-                        wq.push_back(signal);
-                        true
-                    }
-                    Err(_) => false,
-                }
-            }
-            send(worker_sender, wq.pop_front().expect("fixme")) -> res => {
-                if res.is_ok() {
-                    wq.pop_front();
-                }
-                res.is_ok()
-            }
+            Err(_) => false,
         }
     }
 
