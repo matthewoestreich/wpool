@@ -7,7 +7,7 @@ use std::{
     thread,
 };
 
-use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
+use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded, unbounded};
 
 use crate::{
     channel::Channel,
@@ -222,11 +222,13 @@ impl Dispatcher {
 
     fn process_waiting_queue(&self) -> bool {
         match self.task_channel.try_recv() {
+            // Got something from task channel, put in wait queue.
             Ok(signal) => {
                 self.waiting_queue_push_back(signal);
+                true
             }
-            Err(crossbeam_channel::TryRecvError::Empty) => {
-                // Something exists in wait queue
+            // Task channel empty...
+            Err(TryRecvError::Empty) => {
                 if self.waiting_queue_front().is_some()
                     && self
                         .worker_channel
@@ -234,16 +236,16 @@ impl Dispatcher {
                         .is_ok()
                 {
                     let _ = self.waiting_queue_pop_front();
-                    return true;
                 }
+                true
             }
-            Err(_) => return false,
+            // Task channel closed
+            Err(_) => false,
         }
-
-        true
     }
 
     fn run_queued_tasks(&self) {
+        // Acquire lock for entirety of this process.
         let mut wq = safe_lock(&self.waiting_queue);
         while !wq.is_empty() {
             if wq.front().is_some() {
