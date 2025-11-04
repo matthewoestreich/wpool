@@ -1,6 +1,7 @@
-use std::sync::Arc;
-
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use std::sync::{
+    Arc, Mutex,
+    mpsc::{self, Receiver, Sender},
+};
 
 use crate::channel::Channel;
 
@@ -52,18 +53,18 @@ use crate::channel::Channel;
 //      ```
 //
 pub(crate) struct Pauser {
-    ack_chan: Channel<Sender<()>, Receiver<()>>,
-    pause_chan: Channel<Sender<()>, Receiver<()>>,
+    ack_chan: Channel<Sender<()>, Arc<Mutex<Receiver<()>>>>,
+    pause_chan: Channel<Sender<()>, Arc<Mutex<Receiver<()>>>>,
 }
 
 impl Pauser {
     pub(crate) fn new() -> Arc<Self> {
-        let (ack_tx, ack_rx) = unbounded();
-        let (pause_tx, pause_rx) = unbounded();
+        let (ack_tx, ack_rx) = mpsc::channel();
+        let (pause_tx, pause_rx) = mpsc::channel();
 
         Arc::new(Self {
-            ack_chan: Channel::new(ack_tx, ack_rx),
-            pause_chan: Channel::new(pause_tx, pause_rx),
+            ack_chan: Channel::new(ack_tx, Mutex::new(ack_rx).into()),
+            pause_chan: Channel::new(pause_tx, Mutex::new(pause_rx).into()),
         })
     }
 
