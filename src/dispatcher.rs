@@ -20,17 +20,19 @@ use crate::{
 // listen for any status updates from workers, and holds the 'source-of-truth'
 // list containing all active worker threads.
 //
-// To acheive these goals, it spawns 2 threads : a "worker status handler thread" and
-// a "main dispatcher thread".
+// To acheive these goals, it spawns 2 threads : a "worker status handler thread" and a "main dispatcher thread".
 //
 // The "worker status handler thread":
-//   - listens for any status updates from worker threads and handles them accordingly
+//   - Listens for any status updates from worker threads and handles them accordingly
+//   - For exampe, workers are responsibe for timing out themselves, which means they terminate
+//     themselves. Since the dispatcher holds a list of all active threads, we need to know
+//     when a worker dies, so we can update said list.
 //
 // The "main dispatcher thread":
-//   - listens for incoming tasks and routes them to workers
-//   - spawns new workers if needed
-//   - terminates workers during pool shutdown
-//   - terminates the "worker status handler thread" during pool shutdown
+//   - Listens for incoming tasks and routes them to workers
+//   - Spawns new workers if needed
+//   - Terminates workers during pool shutdown
+//   - Terminates the "worker status handler thread" during pool shutdown
 //
 pub(crate) struct Dispatcher {
     pub(crate) waiting: AtomicBool,
@@ -110,17 +112,18 @@ impl Dispatcher {
                     continue;
                 }
 
-                let id = get_next_id();
-
-                dispatcher.add_worker_to_cache(
-                    id,
-                    Worker::spawn(
+                if let Some(status_sender) = dispatcher.worker_status_channel.clone_sender() {
+                    let id = get_next_id();
+                    dispatcher.add_worker_to_cache(
                         id,
-                        dispatcher.worker_channel.clone_receiver(),
-                        dispatcher.worker_status_channel.clone_sender(),
-                        signal,
-                    ),
-                );
+                        Worker::spawn(
+                            id,
+                            dispatcher.worker_channel.clone_receiver(),
+                            status_sender,
+                            signal,
+                        ),
+                    );
+                }
             }
 
             // If the user has called `.stop_wait()`, wait for the waiting queue to also finish.
@@ -226,7 +229,7 @@ impl Dispatcher {
                 if self.waiting_queue_front().is_some()
                     && self
                         .worker_channel
-                        .send(self.waiting_queue_front().expect("is_some verified"))
+                        .send(self.waiting_queue_front().expect("already checked front"))
                         .is_ok()
                 {
                     let _ = self.waiting_queue_pop_front();

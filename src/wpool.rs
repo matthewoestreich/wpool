@@ -544,7 +544,7 @@ mod tests {
         // Start a thread to free the workers after calling stop.  This way
         // the dispatcher can exit, then when this thread runs, the pool
         // can exit.
-        let release_thread_sender = release_chan.clone_sender();
+        let release_thread_sender = release_chan.clone_sender().unwrap();
         let release_handle = thread::spawn(move || {
             for _ in 0..num_jobs {
                 let _ = release_thread_sender.send(());
@@ -623,7 +623,7 @@ mod tests {
 
         for _ in 0..num_threads {
             let thread_pool = Arc::clone(&wp);
-            let max_chan_tx_clone = max_chan.clone_sender();
+            let max_chan_tx_clone = max_chan.clone_sender().unwrap();
             handles.push(thread::spawn(move || {
                 let mut max = 0;
                 for _ in 0..num_jobs {

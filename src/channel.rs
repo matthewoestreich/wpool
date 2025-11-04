@@ -4,8 +4,6 @@ use std::sync::{
     mpsc::{self, Receiver, RecvError, SendError, Sender, SyncSender, TryRecvError},
 };
 
-//use crossbeam_channel::{Receiver, RecvError, SendError, Sender, TryRecvError, TrySendError};
-
 use crate::safe_lock;
 
 pub(crate) type BoundedChannel<T> = crate::channel::Channel<
@@ -27,11 +25,11 @@ impl<T> ThreadSafeReceiver<T> {
     }
 
     pub(crate) fn recv(&self) -> Result<T, RecvError> {
-        self.inner.lock().unwrap().recv()
+        safe_lock(&self.inner).recv()
     }
 
     pub(crate) fn try_recv(&self) -> Result<T, TryRecvError> {
-        self.inner.lock().unwrap().try_recv()
+        safe_lock(&self.inner).try_recv()
     }
 }
 
@@ -82,8 +80,8 @@ impl<T> Channel<Mutex<Option<Sender<T>>>, Arc<Mutex<Receiver<T>>>> {
         safe_lock(&self.receiver).try_recv()
     }
 
-    pub(crate) fn clone_sender(&self) -> Sender<T> {
-        safe_lock(&self.sender).as_ref().unwrap().clone()
+    pub(crate) fn clone_sender(&self) -> Option<Sender<T>> {
+        safe_lock(&self.sender).clone()
     }
 
     pub(crate) fn clone_receiver(&self) -> ThreadSafeReceiver<T> {
