@@ -46,6 +46,7 @@ impl Worker {
                     };
                 }
 
+                println!("worker:{id} is terminating");
                 let _ = worker_status_sender.send(WorkerStatus::Terminating(id));
             })),
         }

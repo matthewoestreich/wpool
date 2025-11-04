@@ -3,7 +3,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc::TryRecvError,
+        mpsc::{Receiver, Sender, SyncSender, TryRecvError},
     },
     thread,
 };
@@ -16,14 +16,8 @@ use crate::{
 };
 
 // These are just type aliases, makes reading legible
-pub(crate) type BoundedChannel<T> = crate::channel::Channel<
-    std::sync::Mutex<Option<std::sync::mpsc::SyncSender<T>>>,
-    std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<T>>>,
->;
-pub(crate) type UnboundedChannel<T> = crate::channel::Channel<
-    std::sync::Mutex<Option<std::sync::mpsc::Sender<T>>>,
-    std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<T>>>,
->;
+pub(crate) type BoundedChannel<T> = Channel<Mutex<Option<SyncSender<T>>>, Arc<Mutex<Receiver<T>>>>;
+pub(crate) type UnboundedChannel<T> = Channel<Mutex<Option<Sender<T>>>, Arc<Mutex<Receiver<T>>>>;
 
 //
 // Dispatcher is meant to route signals to workers, spawn and/or kil workers,
