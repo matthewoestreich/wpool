@@ -6,15 +6,6 @@ use std::sync::{
 
 use crate::safe_lock;
 
-pub(crate) type BoundedChannel<T> = crate::channel::Channel<
-    std::sync::Mutex<Option<std::sync::mpsc::SyncSender<T>>>,
-    std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<T>>>,
->;
-pub(crate) type UnboundedChannel<T> = crate::channel::Channel<
-    std::sync::Mutex<Option<std::sync::mpsc::Sender<T>>>,
-    std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<T>>>,
->;
-
 pub(crate) struct ThreadSafeReceiver<T> {
     inner: Arc<Mutex<Receiver<T>>>,
 }
@@ -78,10 +69,6 @@ impl<T> Channel<Mutex<Option<Sender<T>>>, Arc<Mutex<Receiver<T>>>> {
 
     pub(crate) fn try_recv(&self) -> Result<T, TryRecvError> {
         safe_lock(&self.receiver).try_recv()
-    }
-
-    pub(crate) fn sender_is_some(&self) -> bool {
-        safe_lock(&self.sender).is_some()
     }
 
     pub(crate) fn clone_sender(&self) -> Option<Sender<T>> {

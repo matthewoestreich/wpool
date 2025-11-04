@@ -9,11 +9,21 @@ use std::{
 };
 
 use crate::{
-    channel::{BoundedChannel, Channel, UnboundedChannel},
+    channel::Channel,
     job::Signal,
     monotonic_counter, safe_lock,
     worker::{Worker, WorkerStatus},
 };
+
+// These are just type aliases, makes reading legible
+pub(crate) type BoundedChannel<T> = crate::channel::Channel<
+    std::sync::Mutex<Option<std::sync::mpsc::SyncSender<T>>>,
+    std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<T>>>,
+>;
+pub(crate) type UnboundedChannel<T> = crate::channel::Channel<
+    std::sync::Mutex<Option<std::sync::mpsc::Sender<T>>>,
+    std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<T>>>,
+>;
 
 //
 // Dispatcher is meant to route signals to workers, spawn and/or kil workers,
@@ -115,7 +125,7 @@ impl Dispatcher {
                     let worker_receiver = dispatcher.worker_channel.clone_receiver();
                     dispatcher.add_worker_to_cache(
                         id,
-                        Worker::spawn(id, worker_receiver, worker_status_sender, signal),
+                        Worker::spawn(id, signal, worker_receiver, worker_status_sender),
                     );
                 }
             }

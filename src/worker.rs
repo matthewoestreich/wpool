@@ -23,9 +23,9 @@ pub(crate) struct Worker {
 impl Worker {
     pub(crate) fn spawn(
         id: usize,
+        initial_signal: Signal,
         worker_channel_receiver: Arc<Mutex<Receiver<Signal>>>,
         worker_status_sender: Sender<WorkerStatus>,
-        initial_signal: Signal,
     ) -> Self {
         Self {
             handle: Some(thread::spawn(move || {
