@@ -35,9 +35,9 @@ use crate::{
 //   - Terminates the "worker status handler thread" during pool shutdown
 //
 pub(crate) struct Dispatcher {
-    pub(crate) waiting: AtomicBool,
-    pub(crate) waiting_queue: Mutex<VecDeque<Signal>>,
-    pub(crate) workers: Mutex<HashMap<usize, Worker>>,
+    waiting: AtomicBool,
+    workers: Mutex<HashMap<usize, Worker>>,
+    waiting_queue: Mutex<VecDeque<Signal>>,
     handle: Mutex<Option<thread::JoinHandle<()>>>,
     has_spawned: AtomicBool,
     worker_channel: BoundedChannel<Signal>,
@@ -157,6 +157,10 @@ impl Dispatcher {
         safe_lock(&self.waiting_queue).len()
     }
 
+    pub(crate) fn workers_len(&self) -> usize {
+        safe_lock(&self.workers).len()
+    }
+
     pub(crate) fn join(&self) {
         if let Some(handle) = safe_lock(&self.handle).take() {
             let _ = handle.join();
@@ -186,10 +190,6 @@ impl Dispatcher {
 
     fn is_waiting_queue_empty(&self) -> bool {
         safe_lock(&self.waiting_queue).is_empty()
-    }
-
-    fn workers_len(&self) -> usize {
-        safe_lock(&self.workers).len()
     }
 
     fn _workers_is_empty(&self) -> bool {

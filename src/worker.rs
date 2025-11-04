@@ -32,7 +32,7 @@ impl Worker {
                 let mut maybe_signal = Some(initial_signal);
 
                 while maybe_signal.is_some() {
-                    match maybe_signal.unwrap() {
+                    match maybe_signal.expect("'is_some()' was checked prior to this call") {
                         Signal::NewTask(task) => task.run(),
                         Signal::Pause(pauser) => pauser.pause_this_thread(),
                         Signal::Terminate => break,

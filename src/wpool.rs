@@ -160,7 +160,9 @@ mod tests {
         time::Duration,
     };
 
-    use crate::{channel::Channel, safe_lock, worker::WORKER_IDLE_TIMEOUT, wpool::WPool};
+    use crate::{
+        channel::Channel, safe_lock, worker::WORKER_IDLE_TIMEOUT, wpool::WPool,
+    };
 
     #[test]
     fn test_basic() {
@@ -268,7 +270,7 @@ mod tests {
         // Ensure all workers have passed the timeout
         thread::sleep((WORKER_IDLE_TIMEOUT * (max_workers as u32)) + Duration::from_millis(250));
         p.stop_wait();
-        assert_eq!(safe_lock(&p.dispatcher.workers).len(), 0);
+        assert_eq!(p.dispatcher.workers_len(), 0);
     }
 
     #[test]
@@ -562,13 +564,62 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
+    fn test_wait_queue_len_race_2() {
+        let max_workers = 5;
+        let num_threads = 10;
+        let num_jobs = 20;
+
+        let wp = Arc::new(Mutex::new(WPool::new(max_workers)));
+
+        let wp_len_checker = Arc::clone(&wp);
+        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+        // thread that constantly just reads wait queue len
+        let len_checker_thread = thread::spawn(move || {
+            loop {
+                if let Err(TryRecvError::Disconnected) = stop_rx.try_recv() {
+                    break;
+                }
+                println!(
+                    "[len_checker] wait_que_len={}",
+                    safe_lock(&wp_len_checker).dispatcher.waiting_queue_len()
+                );
+                //thread::yield_now();
+            }
+        });
+
+        let mut handles = vec![];
+        for t in 0..num_threads {
+            let wp_clone = Arc::clone(&wp);
+            handles.push(thread::spawn(move || {
+                let wp_lock = safe_lock(&wp_clone);
+                for j in 0..num_jobs {
+                    wp_lock.submit(move || {
+                        thread::sleep(Duration::from_micros(1));
+                    });
+                    println!(
+                        "[worker][thread={t}][job={j}] wait_queue_len={}",
+                        wp_lock.dispatcher.waiting_queue_len()
+                    );
+                }
+            }));
+        }
+
+        for handle in handles {
+            let _ = handle.join();
+        }
+        drop(stop_tx);
+        let _ = len_checker_thread.join();
+    }
+
     //
     // TODO : THIS TEST NEEDS A THRESHOLD OF 0 REALISTICALLY, I AM TRYING TO FIGURE OUT THE ISSUE
     //
+    #[test]
     fn test_waiting_queue_len_race_100_times() {
         // If this many runs fail this test willl fail.
         // If 'failure_threshold' = 2, if 3 jobs fail, this job fails.
-        let failure_threshold = 5;
+        let failure_threshold = 3;
         let num_runs = 100;
         let mut failed_iterations: Vec<(usize, String)> = Vec::new();
         let mut max = 0;
@@ -628,7 +679,7 @@ mod tests {
                 let mut max = 0;
                 for _ in 0..num_jobs {
                     thread_pool.submit(move || {
-                        thread::sleep(Duration::from_micros(1));
+                        thread::sleep(Duration::from_micros(2));
                     });
                     let waiting = thread_pool.dispatcher.waiting_queue_len();
                     if waiting > max {
