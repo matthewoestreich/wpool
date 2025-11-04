@@ -148,11 +148,6 @@ impl Dispatcher {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn close_worker_channel(&self) {
-        self.worker_channel.close();
-    }
-
-    #[allow(dead_code)]
     pub(crate) fn waiting_queue_len(&self) -> usize {
         safe_lock(&self.waiting_queue).len()
     }
@@ -173,6 +168,11 @@ impl Dispatcher {
 
     pub(crate) fn set_is_waiting(&self, is_waiting: bool) {
         self.waiting.store(is_waiting, Ordering::SeqCst);
+    }
+
+    #[allow(dead_code)]
+    fn close_worker_channel(&self) {
+        self.worker_channel.close();
     }
 
     fn waiting_queue_push_back(&self, signal: Signal) {

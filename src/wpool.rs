@@ -160,9 +160,7 @@ mod tests {
         time::Duration,
     };
 
-    use crate::{
-        channel::Channel, safe_lock, worker::WORKER_IDLE_TIMEOUT, wpool::WPool,
-    };
+    use crate::{channel::Channel, safe_lock, worker::WORKER_IDLE_TIMEOUT, wpool::WPool};
 
     #[test]
     fn test_basic() {
