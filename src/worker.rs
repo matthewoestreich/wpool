@@ -23,13 +23,13 @@ pub(crate) struct Worker {
 impl Worker {
     pub(crate) fn spawn(
         id: usize,
-        initial_signal: Signal,
+        signal: Signal,
         worker_channel_receiver: Arc<Mutex<Receiver<Signal>>>,
         worker_status_sender: Sender<WorkerStatus>,
     ) -> Self {
         Self {
             handle: Some(thread::spawn(move || {
-                let mut maybe_signal = Some(initial_signal);
+                let mut maybe_signal = Some(signal);
 
                 while maybe_signal.is_some() {
                     match maybe_signal.expect("'is_some()' was checked prior to this call") {
