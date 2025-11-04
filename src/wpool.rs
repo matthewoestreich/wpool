@@ -138,7 +138,7 @@ impl WPool {
             self.stopped.store(true, Ordering::SeqCst);
             drop(pause_lock);
             // Let dispatcher know if it should process it's waiting queue before exiting.
-            self.dispatcher.set_is_waiting(wait);
+            self.dispatcher.set_should_wait(wait);
             // Close the task channel.
             self.dispatcher.close_task_channel();
         });

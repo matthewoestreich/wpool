@@ -39,7 +39,7 @@ pub(crate) type UnboundedChannel<T> = Channel<Mutex<Option<Sender<T>>>, Arc<Mute
 //   - Terminates the "worker status handler thread" during pool shutdown
 //
 pub(crate) struct Dispatcher {
-    waiting: AtomicBool,
+    wait: AtomicBool,
     workers: Mutex<HashMap<usize, Worker>>,
     waiting_queue: Mutex<VecDeque<Signal>>,
     handle: Mutex<Option<thread::JoinHandle<()>>>,
@@ -55,7 +55,7 @@ impl Dispatcher {
         Self {
             has_spawned: false.into(),
             handle: None.into(),
-            waiting: false.into(),
+            wait: false.into(),
             max_workers,
             waiting_queue: VecDeque::new().into(),
             worker_channel: Channel::new_bounded(0),
@@ -70,11 +70,12 @@ impl Dispatcher {
             return self;
         }
 
-        let get_next_id = monotonic_counter();
         // Copy of dispatcher for the "main dispatcher thread".
         let dispatcher = Arc::clone(&self);
         // Copy of dispatcher for the "worker status handler thread".
         let handler = Arc::clone(&self);
+
+        let get_next_id = monotonic_counter();
 
         // This is the "worker status handler thread".
         // Since the dispatchers holds a record of all spawned worker threads, we need to know when
@@ -92,7 +93,7 @@ impl Dispatcher {
         // It is responsible for receiving tasks, dispatching tasks to workers, spawning
         // workers, killing workers during pool shutdown, holding the 'source of truth'
         // list for all spawned worker threads, and more.
-        *safe_lock(&self.handle) = Some(thread::spawn(move || {
+        let dispatcher_handle = thread::spawn(move || {
             loop {
                 // As long as the waiting queue isn't empty, incoming signals (on task channel)
                 // are put into the waiting queue and signals to run are taken from the waiting
@@ -122,15 +123,16 @@ impl Dispatcher {
                 }
             }
 
-            if dispatcher.is_waiting() {
+            if dispatcher.should_wait() {
                 dispatcher.run_queued_tasks();
             }
 
             dispatcher.kill_all_workers();
             dispatcher.worker_status_channel.close();
             let _ = worker_status_handle.join();
-        }));
+        });
 
+        *safe_lock(&self.handle) = Some(dispatcher_handle);
         self
     }
 
@@ -157,12 +159,12 @@ impl Dispatcher {
         }
     }
 
-    pub(crate) fn is_waiting(&self) -> bool {
-        self.waiting.load(Ordering::SeqCst)
+    pub(crate) fn should_wait(&self) -> bool {
+        self.wait.load(Ordering::SeqCst)
     }
 
-    pub(crate) fn set_is_waiting(&self, is_waiting: bool) {
-        self.waiting.store(is_waiting, Ordering::SeqCst);
+    pub(crate) fn set_should_wait(&self, is_waiting: bool) {
+        self.wait.store(is_waiting, Ordering::SeqCst);
     }
 
     #[allow(dead_code)]
