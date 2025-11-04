@@ -37,6 +37,7 @@ impl Worker {
                         Signal::Pause(pauser) => pauser.pause_this_thread(),
                         Signal::Terminate => break,
                     }
+                    
                     maybe_signal = match safe_lock(&worker_channel_receiver)
                         .recv_timeout(WORKER_IDLE_TIMEOUT)
                     {
