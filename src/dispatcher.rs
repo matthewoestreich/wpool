@@ -117,10 +117,8 @@ impl Dispatcher {
                 {
                     let id = get_next_id();
                     let worker_receiver = dispatcher.worker_channel.clone_receiver();
-                    dispatcher.add_worker_to_cache(
-                        id,
-                        Worker::spawn(id, signal, worker_receiver, worker_status_sender),
-                    );
+                    let worker = Worker::spawn(id, signal, worker_receiver, worker_status_sender);
+                    dispatcher.add_worker_to_cache(id, worker);
                 }
             }
 
