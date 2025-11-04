@@ -815,19 +815,28 @@ mod tests {
     #[test]
     fn test_submit_wait_actually_waits() {
         let max_workers = 3;
+        let num_regular_jobs = 50;
         let counter = Arc::new(AtomicUsize::new(0));
-        let counter_clone = Arc::clone(&counter);
 
         let p = WPool::new(max_workers);
 
+        for _ in 0..num_regular_jobs {
+            let counter = Arc::clone(&counter);
+            p.submit(move || {
+                thread::sleep(Duration::from_micros(1));
+                counter.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+
+        let submit_wait_counter = Arc::clone(&counter);
         p.submit_wait(move || {
             thread::sleep(Duration::from_millis(500));
-            counter_clone.fetch_add(1, Ordering::SeqCst);
+            submit_wait_counter.fetch_add(1, Ordering::SeqCst);
         });
 
         assert_eq!(
             counter.load(Ordering::SeqCst),
-            1,
+            num_regular_jobs + 1,
             "Did not wait for submit_wait job to complete"
         );
     }
