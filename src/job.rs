@@ -31,6 +31,7 @@ impl Clone for Task {
         }
     }
 }
+
 #[derive(Clone)]
 pub(crate) enum Signal {
     NewTask(Task),
