@@ -122,7 +122,6 @@ impl Dispatcher {
                 }
             }
 
-            // If the user has called `.stop_wait()`, wait for the waiting queue to also finish.
             if dispatcher.is_waiting() {
                 dispatcher.run_queued_tasks();
             }
