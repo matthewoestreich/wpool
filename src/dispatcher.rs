@@ -3,14 +3,13 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
+        mpsc::TryRecvError,
     },
     thread,
 };
 
-use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded, unbounded};
-
 use crate::{
-    channel::Channel,
+    channel::{BoundedChannel, Channel, UnboundedChannel},
     job::Signal,
     monotonic_counter, safe_lock,
     worker::{Worker, WorkerStatus},
@@ -39,27 +38,23 @@ pub(crate) struct Dispatcher {
     pub(crate) workers: Mutex<HashMap<usize, Worker>>,
     handle: Mutex<Option<thread::JoinHandle<()>>>,
     has_spawned: AtomicBool,
-    worker_channel: Channel<Mutex<Option<Sender<Signal>>>, Receiver<Signal>>,
-    task_channel: Channel<Mutex<Option<Sender<Signal>>>, Receiver<Signal>>,
-    worker_status_channel: Channel<Mutex<Option<Sender<WorkerStatus>>>, Receiver<WorkerStatus>>,
+    worker_channel: BoundedChannel<Signal>,
+    task_channel: UnboundedChannel<Signal>,
+    worker_status_channel: UnboundedChannel<WorkerStatus>,
     max_workers: usize,
 }
 
 impl Dispatcher {
     pub(crate) fn new(max_workers: usize) -> Self {
-        let (task_tx, task_rx) = unbounded();
-        let (status_tx, status_rx) = unbounded();
-        let (worker_tx, worker_rx) = bounded(0);
-
         Self {
             has_spawned: false.into(),
             handle: None.into(),
             waiting: false.into(),
             max_workers,
             waiting_queue: VecDeque::new().into(),
-            worker_channel: Channel::new(Some(worker_tx).into(), worker_rx),
-            worker_status_channel: Channel::new(Some(status_tx).into(), status_rx),
-            task_channel: Channel::new(Some(task_tx).into(), task_rx),
+            worker_channel: Channel::new_bounded(0),
+            worker_status_channel: Channel::new_unbounded(),
+            task_channel: Channel::new_unbounded(),
             workers: HashMap::new().into(),
         }
     }
@@ -115,18 +110,17 @@ impl Dispatcher {
                     continue;
                 }
 
-                if let Some(status_sender) = dispatcher.worker_status_channel.clone_sender() {
-                    let id = get_next_id();
-                    dispatcher.add_worker_to_cache(
+                let id = get_next_id();
+
+                dispatcher.add_worker_to_cache(
+                    id,
+                    Worker::spawn(
                         id,
-                        Worker::spawn(
-                            id,
-                            dispatcher.worker_channel.clone_receiver(),
-                            status_sender,
-                            signal,
-                        ),
-                    );
-                }
+                        dispatcher.worker_channel.clone_receiver(),
+                        dispatcher.worker_status_channel.clone_sender(),
+                        signal,
+                    ),
+                );
             }
 
             // If the user has called `.stop_wait()`, wait for the waiting queue to also finish.

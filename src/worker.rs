@@ -1,6 +1,13 @@
-use std::{thread, time::Duration};
+use std::{
+    sync::{
+        Arc, Mutex,
+        mpsc::{Receiver, RecvTimeoutError, Sender},
+    },
+    thread,
+    time::Duration,
+};
 
-use crate::job::Signal;
+use crate::{job::Signal, safe_lock};
 
 pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -16,8 +23,8 @@ pub(crate) struct Worker {
 impl Worker {
     pub(crate) fn spawn(
         id: usize,
-        worker_channel_receiver: crossbeam_channel::Receiver<Signal>,
-        worker_status_sender: crossbeam_channel::Sender<WorkerStatus>,
+        worker_channel_receiver: Arc<Mutex<Receiver<Signal>>>,
+        worker_status_sender: Sender<WorkerStatus>,
         initial_signal: Signal,
     ) -> Self {
         Self {
@@ -30,9 +37,11 @@ impl Worker {
                         Signal::Pause(pauser) => pauser.pause_this_thread(),
                         Signal::Terminate => break,
                     }
-                    maybe_signal = match worker_channel_receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
+                    maybe_signal = match safe_lock(&worker_channel_receiver)
+                        .recv_timeout(WORKER_IDLE_TIMEOUT)
+                    {
                         Ok(signal) => Some(signal),
-                        Err(crossbeam_channel::RecvTimeoutError::Timeout) => break,
+                        Err(RecvTimeoutError::Timeout) => break,
                         Err(_) => break,
                     };
                 }
