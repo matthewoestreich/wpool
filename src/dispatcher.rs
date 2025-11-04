@@ -127,7 +127,7 @@ impl Dispatcher {
                 dispatcher.run_queued_tasks();
             }
 
-            dispatcher.kill_all_workers();
+            dispatcher.terminate_workers();
             dispatcher.worker_status_channel.close();
             let _ = worker_status_handle.join();
         });
@@ -201,7 +201,7 @@ impl Dispatcher {
         safe_lock(&self.workers).remove(element)
     }
 
-    fn kill_all_workers(&self) {
+    fn terminate_workers(&self) {
         let mut workers = safe_lock(&self.workers);
         // Send kill signal to workers as they become available
         for _ in workers.iter() {
