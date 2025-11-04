@@ -80,6 +80,10 @@ impl<T> Channel<Mutex<Option<Sender<T>>>, Arc<Mutex<Receiver<T>>>> {
         safe_lock(&self.receiver).try_recv()
     }
 
+    pub(crate) fn sender_is_some(&self) -> bool {
+        safe_lock(&self.sender).is_some()
+    }
+
     pub(crate) fn clone_sender(&self) -> Option<Sender<T>> {
         safe_lock(&self.sender).clone()
     }

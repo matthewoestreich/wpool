@@ -106,22 +106,16 @@ impl Dispatcher {
                     Err(_) => break,
                 };
 
-                // At max workers
                 if dispatcher.workers_len() >= dispatcher.max_workers {
                     dispatcher.waiting_queue_push_back(signal);
-                    continue;
-                }
-
-                if let Some(status_sender) = dispatcher.worker_status_channel.clone_sender() {
+                } else if let Some(worker_status_sender) =
+                    dispatcher.worker_status_channel.clone_sender()
+                {
                     let id = get_next_id();
+                    let worker_receiver = dispatcher.worker_channel.clone_receiver();
                     dispatcher.add_worker_to_cache(
                         id,
-                        Worker::spawn(
-                            id,
-                            dispatcher.worker_channel.clone_receiver(),
-                            status_sender,
-                            signal,
-                        ),
+                        Worker::spawn(id, worker_receiver, worker_status_sender, signal),
                     );
                 }
             }
