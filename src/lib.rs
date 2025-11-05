@@ -2,7 +2,9 @@
 //!
 //! This library is essentially a port of [`workerpool`](https://github.com/gammazero/workerpool), an amazing Go library.
 //!
-//! **Pool with only worker maximum**
+//! # Examples
+//!
+//! ## Pool with only worker maximum
 //!
 //! ```rust
 //! // At most 10 workers can run at once.
@@ -23,7 +25,7 @@
 //! pool.stop_wait();
 //! ```
 //!
-//! **Pool with both worker maximum and worker minimum**
+//! ## Pool with both worker maximum and worker minimum
 //!
 //! `min_workers` defines (up to) the minimum number of worker threads that should always stay alive, even when the pool is idle.
 //!
@@ -65,3 +67,6 @@ pub(crate) fn safe_lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_,
         Err(poisoned) => poisoned.into_inner(),
     }
 }
+
+#[cfg(test)]
+mod tests;
