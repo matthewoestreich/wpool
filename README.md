@@ -26,13 +26,14 @@ pool.stop_wait();
 
 **Pool with both worker maximum and worker minimum**
 
-A pool with a minimum worker size will have a ''
+`min_workers` defines (up to) the minimum number of worker threads that should always stay alive, even when the pool is idle.
+
+**NOTE**: We do not 'pre-spawn' workers, meaning, if you set `min_workers=3` but your pool only ever creates 2 workers, then only 2 workers will ever exist (and should always be alive).
 
 ```rust
 // At most 10 workers can run at once.
 let max_workers = 10;
-// At minimum 3 workers will always exist once
-// at least 3 workers have been spawned.
+// At minimum 3 workers should always exist
 let min_workers = 3;
 
 let pool = WPool::new_with_min(max_workers, min_workers);
