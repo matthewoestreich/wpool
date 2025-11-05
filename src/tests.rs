@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use std::{
-    panic,
+    panic::{self, RefUnwindSafe, UnwindSafe},
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -11,6 +11,62 @@ use std::{
 };
 
 use crate::{channel::unbounded, safe_lock, worker::WORKER_IDLE_TIMEOUT, wpool::WPool};
+
+// Runs a test `n_times` in a row.
+// failure_threshold : If this many runs fail this test willl fail. If 'failure_threshold' = 2, if 3 jobs fail, this job fails.
+fn run_test_n_times<F>(n_times: usize, failure_threshold: usize, test_fn: F)
+where
+    F: Fn() + Send + UnwindSafe + RefUnwindSafe + 'static,
+{
+    let mut failed_iterations: Vec<(usize, String)> = Vec::new();
+
+    for i in 0..n_times {
+        println!("JOB {i}");
+
+        let result = panic::catch_unwind(|| {
+            test_fn();
+        });
+
+        if let Err(e) = result {
+            let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = e.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "-".to_string()
+            };
+            failed_iterations.push((i, msg));
+        }
+    }
+
+    assert!(
+        if failure_threshold == 0 {
+            failed_iterations.is_empty()
+        } else {
+            failed_iterations.len() <= failure_threshold
+        },
+        "expected this to fail at most {failure_threshold} times, instead it failed {}/{}",
+        failed_iterations.len(),
+        n_times
+    );
+}
+
+// Helper function...runs a closure and fails after duration.
+fn run_test_with_timeout<F>(timeout: Duration, test_fn: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        test_fn();
+        tx.send(()).ok();
+    });
+
+    if rx.recv_timeout(timeout).is_err() {
+        panic!("test timed out after {timeout:#?}");
+    }
+}
 
 #[test]
 fn test_basic() {
