@@ -400,7 +400,7 @@ mod tests {
 
         // Check that task was enqueued
         assert_eq!(
-            wp.dispatcher.waiting_queue_len(),
+            wp.dispatcher._waiting_queue_len(),
             1,
             "waiting queue size should be 1"
         );
@@ -581,7 +581,7 @@ mod tests {
         p.stop();
         // Now that the pool has exited, it is safe to inspect its waiting
         // queue without causing a race.
-        let wq_len = p.dispatcher.waiting_queue_len();
+        let wq_len = p.dispatcher._waiting_queue_len();
         assert_eq!(
             wq_len, expected_len,
             "Expected waiting to queue to have len of '{expected_len}' but got '{wq_len}'"
@@ -608,7 +608,7 @@ mod tests {
                 }
                 println!(
                     "[len_checker] wait_que_len={}",
-                    safe_lock(&wp_len_checker).dispatcher.waiting_queue_len()
+                    safe_lock(&wp_len_checker).dispatcher._waiting_queue_len()
                 );
                 //thread::yield_now();
             }
@@ -625,7 +625,7 @@ mod tests {
                     });
                     println!(
                         "[worker][thread={t}][job={j}] wait_queue_len={}",
-                        wp_lock.dispatcher.waiting_queue_len()
+                        wp_lock.dispatcher._waiting_queue_len()
                     );
                 }
             }));
@@ -707,7 +707,7 @@ mod tests {
                     thread_pool.submit(move || {
                         thread::sleep(Duration::from_micros(2));
                     });
-                    let waiting = thread_pool.dispatcher.waiting_queue_len();
+                    let waiting = thread_pool.dispatcher._waiting_queue_len();
                     if waiting > max {
                         max = waiting;
                     }

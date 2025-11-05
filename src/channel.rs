@@ -55,17 +55,17 @@ impl<T> Sender<T> {
         }
     }
 
-    pub(crate) fn close(&self) -> bool {
+    pub(crate) fn drop(&self) {
         match self {
-            Self::Unbounded(tx) => safe_lock(tx).take().is_some(),
-            Self::Bounded(tx) => safe_lock(tx).take().is_some(),
+            Self::Unbounded(tx) => drop(safe_lock(tx).take()),
+            Self::Bounded(tx) => drop(safe_lock(tx).take()),
         }
     }
 
-    pub(crate) fn is_closed(&self) -> bool {
+    pub(crate) fn is_some(&self) -> bool {
         match self {
-            Self::Unbounded(tx) => safe_lock(tx).is_none(),
-            Self::Bounded(tx) => safe_lock(tx).is_none(),
+            Self::Unbounded(tx) => safe_lock(tx).is_some(),
+            Self::Bounded(tx) => safe_lock(tx).is_some(),
         }
     }
 }
@@ -180,17 +180,17 @@ impl<T> Channel<T> {
         }
     }
 
-    pub(crate) fn close(&self) -> bool {
+    pub(crate) fn drop_sender(&self) {
         match &self.kind {
-            ChannelKind::Unbounded { sender, .. } => sender.close(),
-            ChannelKind::Bounded { sender, .. } => sender.close(),
+            ChannelKind::Unbounded { sender, .. } => sender.drop(),
+            ChannelKind::Bounded { sender, .. } => sender.drop(),
         }
     }
 
-    pub(crate) fn is_closed(&self) -> bool {
+    pub(crate) fn is_sender_some(&self) -> bool {
         match &self.kind {
-            ChannelKind::Unbounded { sender, .. } => sender.is_closed(),
-            ChannelKind::Bounded { sender, .. } => sender.is_closed(),
+            ChannelKind::Unbounded { sender, .. } => sender.is_some(),
+            ChannelKind::Bounded { sender, .. } => sender.is_some(),
         }
     }
 }

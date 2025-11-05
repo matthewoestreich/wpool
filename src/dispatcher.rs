@@ -126,7 +126,7 @@ impl Dispatcher {
             }
 
             dispatcher.terminate_workers();
-            dispatcher.worker_status_channel.close();
+            dispatcher.worker_status_channel.drop_sender();
             let _ = worker_status_handle.join();
         });
 
@@ -139,12 +139,7 @@ impl Dispatcher {
     }
 
     pub(crate) fn close_task_channel(&self) {
-        self.task_channel.close();
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn waiting_queue_len(&self) -> usize {
-        safe_lock(&self.waiting_queue).len()
+        self.task_channel.drop_sender();
     }
 
     pub(crate) fn workers_len(&self) -> usize {
@@ -164,6 +159,8 @@ impl Dispatcher {
     pub(crate) fn set_is_wait(&self, is_waiting: bool) {
         self.is_wait.store(is_waiting, Ordering::SeqCst);
     }
+
+    /***************** Private methods ***********************/
 
     fn spawn_worker(&self, signal: Signal) -> Worker {
         Worker::spawn(
@@ -217,11 +214,6 @@ impl Dispatcher {
         self.current_worker_id.fetch_add(1, Ordering::SeqCst)
     }
 
-    #[allow(dead_code)]
-    fn close_worker_channel(&self) {
-        self.worker_channel.close();
-    }
-
     fn waiting_queue_push_back(&self, signal: Signal) {
         safe_lock(&self.waiting_queue).push_back(signal);
     }
@@ -239,15 +231,17 @@ impl Dispatcher {
         safe_lock(&self.waiting_queue).is_empty()
     }
 
-    fn _workers_is_empty(&self) -> bool {
-        safe_lock(&self.workers).is_empty()
-    }
-
     fn cache_worker(&self, worker: Worker) -> Option<Worker> {
         safe_lock(&self.workers).insert(worker.id, worker)
     }
 
     fn uncache_worker(&self, element: &usize) -> Option<Worker> {
         safe_lock(&self.workers).remove(element)
+    }
+
+    /************* Used in tests *************************/
+
+    pub(crate) fn _waiting_queue_len(&self) -> usize {
+        safe_lock(&self.waiting_queue).len()
     }
 }
