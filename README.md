@@ -28,7 +28,7 @@ pool.stop_wait();
 
 `min_workers` defines (up to) the minimum number of worker threads that should always stay alive, even when the pool is idle.
 
-**NOTE**: We do not 'pre-spawn' workers, meaning, if you set `min_workers=3` but your pool only ever creates 2 workers, then only 2 workers will ever exist (and should always be alive).
+**NOTE**: *We do not 'pre-spawn' workers!* Meaning, if you set `min_workers = 3` but your pool only ever creates 2 workers, then only 2 workers will ever exist (and should always be alive).
 
 ```rust
 // At most 10 workers can run at once.
