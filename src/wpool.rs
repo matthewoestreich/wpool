@@ -11,6 +11,9 @@ use crate::{
     thread::Pauser,
 };
 
+/// `WPool` is a thread pool that limits the number of tasks executing concurrently,
+/// without restricting how many tasks can be queued. Submitting tasks is non-blocking,
+/// so you can enqueue any number of tasks without waiting.
 pub struct WPool {
     pub(crate) dispatcher: Arc<Dispatcher>,
     max_workers: usize,
@@ -33,69 +36,108 @@ impl WPool {
         }
     }
 
+    /// `new` creates and starts a pool of worker threads.
+    ///
+    /// The `max_workers` parameter specifies the maximum number of workers that can
+    /// execute tasks concurrently. When there are no incoming tasks, workers are
+    /// gradually stopped until there are no remaining workers.
     pub fn new(max_workers: usize) -> Self {
         let dispatcher = Arc::new(Dispatcher::new(max_workers, 0));
         Self::new_base(max_workers, dispatcher)
     }
 
+    /// `new` creates and starts a pool of worker threads.
+    ///
+    /// The `max_workers` parameter specifies the maximum number of workers that can
+    /// execute tasks concurrently. When there are no incoming tasks, workers are
+    /// gradually stopped until there are no remaining workers.
+    ///
+    /// The `min_workers` parameter specifies up to the minimum amount of workers that
+    /// should aways exist, even when the pool is idle. This is designed to help
+    /// eliminate the overhead of spinning up threads from scratch.
+    /// If `min_workers` is greater than `max_workers` then we change `min_workers` to
+    /// equal `max_workers`.
     pub fn new_with_min(max_workers: usize, min_workers: usize) -> Self {
         let dispatcher = Arc::new(Dispatcher::new(max_workers, min_workers));
         Self::new_base(max_workers, dispatcher)
     }
 
-    pub fn capacity(&self) -> usize {
+    /// The number of `max_workers`.
+    pub fn max_capacity(&self) -> usize {
         self.max_workers
     }
 
-    // Enqueues the given function.
-    pub fn submit<F>(&self, f: F)
+    /// The number of `min_workers`.
+    pub fn min_capacity(&self) -> usize {
+        self.dispatcher.min_workers
+    }
+
+    /// Enqueues the given function.
+    ///
+    /// Any external values needed by the task function must be captured in a closure.
+    /// Any return values should be sent over a channel, or by similar means.
+    ///
+    /// `submit` is non-blocking, regardless of the number of tasks submitted. Each task
+    /// is immediately given to an available worker. If there are no available workers, and
+    /// the maximum number of workers are already created, the task will be put in a wait queue.
+    ///
+    /// As long as there are tasks in the wait queue, any additional new tasks are put in the
+    /// wait queue. Tasks are removed from the wait queue as workers become available.
+    pub fn submit<F>(&self, task: F)
     where
         F: FnOnce() + Send + 'static,
     {
-        let t = Task::new(Box::new(f));
+        let t = Task::new(Box::new(task));
         self.submit_signal(Signal::NewTask(t));
     }
 
-    // Enqueues the given function and waits for it to be executed.
-    pub fn submit_wait<F>(&self, f: F)
+    /// Enqueues the given function and blocks until it has been executed.
+    pub fn submit_wait<F>(&self, task: F)
     where
         F: FnOnce() + Send + 'static,
     {
         let (sender, receiver) = mpsc::sync_channel(0);
         self.submit(move || {
-            f();
+            task();
             let _ = sender.send(());
         });
         let _ = receiver.recv(); // blocks until complete
     }
 
-    // Stop and wait for all current work to complete, as well as all signals in the dispatchers waiting_queue.
+    /// Stops the pool and waits for currently running tasks, as well as any tasks
+    /// in the wait queue, to complete. Task submission is disallowed after
+    /// `stop_wait()` has been called.
+    ///
+    /// **Since creating the pool starts at least one thread, for the dispatcher,
+    /// `stop()` or `stop_wait()` should only be called when the worker pool is no
+    /// longer needed**.
     pub fn stop_wait(&self) {
         self.shutdown(true);
     }
 
-    // Stop lets all current work finish but disregards signals in the dispatchers waiting_queue.
+    /// `stop` stops the worker pool and waits for only currently running tasks to
+    /// complete. Pending tasks that are not currently running are abandoned. **Tasks
+    /// must not be submitted to the pool after calling stop.**
+    ///
+    /// **Since creating the pool starts at least one thread, for the dispatcher,
+    /// `stop()` or `stop_wait()` should only be called when the worker pool is no
+    /// longer needed**.
     pub fn stop(&self) {
         self.shutdown(false);
     }
 
-    // Pause all possible workers.
-    //
-    // - Blocks until all workers have acknowledged that they're paused.
-    //
-    // - If current worker count is less than max workers, workers will be spawned,
-    //   up to 'max_workers' amount, and immediately paused. This ensures every
-    //   possible worker that could exist in 'this' pool is paused.
-    //
-    // - Paused workers are unable to accept new signals, but you can still submit
-    //   signals so workers can handle them when they are unpaused.
-    //
-    // - To unpause, you must explicitly call `.resume()` on your pool instance.
-    //
-    // - If the pool is stopped while paused, workers are unpaused and queued tasks
-    //   are processed during `stop_wait()`.
-    //
-    // - If the pool is already paused, we ignore this call.
+    /// Pause all possible workers and block until each worker has acknowledged that
+    /// they're paused.
+    ///
+    /// You must explicity call `resume()`, `stop()`, or `stop_wait()` to unpause the
+    /// pool. If you want to unpause without any side-effects, call `resume()`.
+    ///
+    /// Paused workers are unable to accept new tasks, although you can still submit
+    /// tasks, which will be picked up by workers once they're resumed.
+    ///
+    /// If the number of active workers is less than the pool maximum, workers will
+    /// be spawned, up to the pool maximum, and immediately paused. This ensures that
+    /// every worker that could possibly exist in the pool is paused.
     pub fn pause(&self) {
         // We want to hold the pause lock for the entirety of the pause operation.
         let mut is_paused = safe_lock(&self.paused);
@@ -115,7 +157,7 @@ impl WPool {
         *is_paused = true;
     }
 
-    // Resumes/unpauses all workers.
+    /// Resumes/unpauses all paused workers.
     pub fn resume(&self) {
         // We want to hold the pause lock for the entirety of the resume operation.
         let mut is_paused = safe_lock(&self.paused);
@@ -127,6 +169,8 @@ impl WPool {
         }
         *is_paused = false;
     }
+
+    /************************* Private methods ***************************************/
 
     // "Quality-of-life" function, easier to submit signals directly to the dispatcher.
     fn submit_signal(&self, signal: Signal) {

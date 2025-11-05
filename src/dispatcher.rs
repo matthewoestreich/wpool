@@ -37,7 +37,7 @@ pub(crate) struct Dispatcher {
     handle: Mutex<Option<thread::JoinHandle<()>>>,
     has_spawned: AtomicBool,
     max_workers: usize,
-    min_workers: usize,
+    pub(crate) min_workers: usize,
     task_channel: Channel<Signal>,
     is_wait: AtomicBool,
     waiting_queue: Mutex<VecDeque<Signal>>,
