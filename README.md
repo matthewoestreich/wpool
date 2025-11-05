@@ -33,7 +33,7 @@ pool.stop_wait();
 ```rust
 // At most 10 workers can run at once.
 let max_workers = 10;
-// At minimum up to 3 workers should always exist
+// At minimum up to 3 workers should always exist.
 let min_workers = 3;
 
 let pool = WPool::new_with_min(max_workers, min_workers);
