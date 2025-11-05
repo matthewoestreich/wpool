@@ -2,8 +2,8 @@ use std::{
     collections::{HashMap, VecDeque},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-        mpsc::TryRecvError,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc::{RecvTimeoutError, TryRecvError},
     },
     thread,
 };
@@ -11,11 +11,10 @@ use std::{
 use crate::{
     channel::{Channel, bounded, unbounded},
     job::Signal,
-    monotonic_counter, safe_lock,
-    worker::{Worker, WorkerStatus},
+    safe_lock,
+    worker::{WORKER_IDLE_TIMEOUT, Worker, WorkerStatus},
 };
 
-//
 // Dispatcher is meant to route signals to workers, spawn and/or kil workers,
 // listen for any status updates from workers, and holds the 'source-of-truth'
 // list containing all active worker threads.
@@ -33,30 +32,33 @@ use crate::{
 //   - Spawns new workers if needed
 //   - Terminates workers during pool shutdown
 //   - Terminates the "worker status handler thread" during pool shutdown
-//
 pub(crate) struct Dispatcher {
-    wait: AtomicBool,
-    workers: Mutex<HashMap<usize, Worker>>,
-    waiting_queue: Mutex<VecDeque<Signal>>,
+    current_worker_id: AtomicUsize,
     handle: Mutex<Option<thread::JoinHandle<()>>>,
     has_spawned: AtomicBool,
-    worker_channel: Channel<Signal>,
-    task_channel: Channel<Signal>,
-    worker_status_channel: Channel<WorkerStatus>,
     max_workers: usize,
+    min_workers: usize,
+    task_channel: Channel<Signal>,
+    is_wait: AtomicBool,
+    waiting_queue: Mutex<VecDeque<Signal>>,
+    worker_channel: Channel<Signal>,
+    worker_status_channel: Channel<WorkerStatus>,
+    workers: Mutex<HashMap<usize, Worker>>,
 }
 
 impl Dispatcher {
-    pub(crate) fn new(max_workers: usize) -> Self {
+    pub(crate) fn new(max_workers: usize, min_workers: usize) -> Self {
         Self {
-            has_spawned: false.into(),
+            current_worker_id: AtomicUsize::new(0),
             handle: None.into(),
-            wait: false.into(),
+            has_spawned: false.into(),
             max_workers,
+            min_workers,
+            task_channel: unbounded(),
+            is_wait: false.into(),
             waiting_queue: VecDeque::new().into(),
             worker_channel: bounded(0),
             worker_status_channel: unbounded(),
-            task_channel: unbounded(),
             workers: HashMap::new().into(),
         }
     }
@@ -71,15 +73,13 @@ impl Dispatcher {
         // Copy of dispatcher for the "worker status handler thread".
         let handler = Arc::clone(&self);
 
-        let get_next_id = monotonic_counter();
-
         // This is the "worker status handler thread".
         // Since the dispatchers holds a record of all spawned worker threads, we need to know when
         // a worker terminates itself so we can update said record. A worker will terminate itself
         // if it did not receive a signal within the timeout duration.
         let worker_status_handle = thread::spawn(move || {
             while let Ok(WorkerStatus::Terminating(id)) = handler.worker_status_channel.recv() {
-                if let Some(mut worker) = handler.remove_worker_from_cache(&id) {
+                if let Some(mut worker) = handler.uncache_worker(&id) {
                     worker.join();
                 }
             }
@@ -102,27 +102,26 @@ impl Dispatcher {
                     continue;
                 }
 
-                let signal = match dispatcher.task_channel.recv() {
+                let signal = match dispatcher.task_channel.recv_timeout(WORKER_IDLE_TIMEOUT) {
                     Ok(signal) => signal,
+                    Err(RecvTimeoutError::Timeout) => {
+                        if dispatcher.workers_len() > dispatcher.min_workers {
+                            let _ = dispatcher.worker_channel.send(Signal::Terminate);
+                        }
+                        continue;
+                    }
                     Err(_) => break,
                 };
 
                 if dispatcher.workers_len() >= dispatcher.max_workers {
                     dispatcher.waiting_queue_push_back(signal);
                 } else {
-                    let id = get_next_id();
-                    let status_sender = dispatcher.worker_status_channel.clone_sender();
-                    let worker_receiver = dispatcher.worker_channel.clone_receiver();
-                    let worker = Worker::spawn(id, signal, worker_receiver, status_sender);
-                    dispatcher.add_worker_to_cache(id, worker);
+                    let worker = dispatcher.spawn_worker(signal);
+                    dispatcher.cache_worker(worker);
                 }
-                //else if let Some(worker_status_sender) =
-                //    dispatcher.worker_status_channel.clone_sender()
-                //{
-                //}
             }
 
-            if dispatcher.should_wait() {
+            if dispatcher.is_wait() {
                 dispatcher.run_queued_tasks();
             }
 
@@ -158,12 +157,64 @@ impl Dispatcher {
         }
     }
 
-    pub(crate) fn should_wait(&self) -> bool {
-        self.wait.load(Ordering::SeqCst)
+    pub(crate) fn is_wait(&self) -> bool {
+        self.is_wait.load(Ordering::SeqCst)
     }
 
-    pub(crate) fn set_should_wait(&self, is_waiting: bool) {
-        self.wait.store(is_waiting, Ordering::SeqCst);
+    pub(crate) fn set_is_wait(&self, is_waiting: bool) {
+        self.is_wait.store(is_waiting, Ordering::SeqCst);
+    }
+
+    fn spawn_worker(&self, signal: Signal) -> Worker {
+        Worker::spawn(
+            self.get_next_id(),
+            signal,
+            self.worker_channel.clone_receiver(),
+            self.worker_status_channel.clone_sender(),
+        )
+    }
+
+    fn terminate_workers(&self) {
+        let mut workers = safe_lock(&self.workers);
+        for _ in workers.iter() {
+            let _ = self.worker_channel.send(Signal::Terminate); // Blocking
+        }
+        for (_, mut worker) in workers.drain() {
+            worker.join();
+        }
+    }
+
+    fn process_waiting_queue(&self) -> bool {
+        match self.task_channel.try_recv() {
+            Ok(signal) => self.waiting_queue_push_back(signal),
+            Err(TryRecvError::Empty) => {
+                if self.waiting_queue_front().is_some()
+                    && self
+                        .worker_channel
+                        .send(self.waiting_queue_front().expect("front"))
+                        .is_ok()
+                {
+                    let _ = self.waiting_queue_pop_front();
+                }
+            }
+            Err(_) => return false, // Task channel closed.
+        };
+        true
+    }
+
+    fn run_queued_tasks(&self) {
+        // Acquire lock for entirety of this process.
+        let mut wq = safe_lock(&self.waiting_queue);
+        while !wq.is_empty() {
+            if wq.front().is_some() {
+                let signal = wq.pop_front().expect("front");
+                let _ = self.worker_channel.send(signal);
+            }
+        }
+    }
+
+    fn get_next_id(&self) -> usize {
+        self.current_worker_id.fetch_add(1, Ordering::SeqCst)
     }
 
     #[allow(dead_code)]
@@ -192,60 +243,11 @@ impl Dispatcher {
         safe_lock(&self.workers).is_empty()
     }
 
-    fn add_worker_to_cache(&self, id: usize, worker: Worker) -> Option<Worker> {
-        safe_lock(&self.workers).insert(id, worker)
+    fn cache_worker(&self, worker: Worker) -> Option<Worker> {
+        safe_lock(&self.workers).insert(worker.id, worker)
     }
 
-    fn remove_worker_from_cache(&self, element: &usize) -> Option<Worker> {
+    fn uncache_worker(&self, element: &usize) -> Option<Worker> {
         safe_lock(&self.workers).remove(element)
-    }
-
-    fn terminate_workers(&self) {
-        let mut workers = safe_lock(&self.workers);
-        // Send kill signal to workers as they become available
-        for _ in workers.iter() {
-            // Will block until a ready worker calls recv
-            let _ = self.worker_channel.send(Signal::Terminate);
-        }
-        // Join worker threads, will block until all workers have finished.
-        for (_, mut worker) in workers.drain() {
-            worker.join();
-        }
-    }
-
-    fn process_waiting_queue(&self) -> bool {
-        match self.task_channel.try_recv() {
-            // Got something from task channel, put in wait queue.
-            Ok(signal) => {
-                self.waiting_queue_push_back(signal);
-                true
-            }
-            // Task channel empty...
-            Err(TryRecvError::Empty) => {
-                if self.waiting_queue_front().is_some()
-                    && self
-                        .worker_channel
-                        .send(self.waiting_queue_front().expect("already checked front"))
-                        .is_ok()
-                {
-                    let _ = self.waiting_queue_pop_front();
-                }
-                true
-            }
-            // Task channel closed
-            Err(_) => false,
-        }
-    }
-
-    fn run_queued_tasks(&self) {
-        // Acquire lock for entirety of this process.
-        let mut wq = safe_lock(&self.waiting_queue);
-        while !wq.is_empty() {
-            if wq.front().is_some() {
-                let _ = self
-                    .worker_channel
-                    .send(wq.pop_front().expect("already checked front"));
-            }
-        }
     }
 }

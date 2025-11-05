@@ -1,4 +1,4 @@
-use std::{sync::mpsc::RecvTimeoutError, thread, time::Duration};
+use std::{thread, time::Duration};
 
 use crate::{
     channel::{Receiver, Sender},
@@ -13,6 +13,7 @@ pub(crate) enum WorkerStatus {
 
 #[derive(Debug)]
 pub(crate) struct Worker {
+    pub(crate) id: usize,
     handle: Option<thread::JoinHandle<()>>,
 }
 
@@ -24,21 +25,20 @@ impl Worker {
         worker_status_sender: Sender<WorkerStatus>,
     ) -> Self {
         Self {
+            id,
             handle: Some(thread::spawn(move || {
                 let mut maybe_signal = Some(signal);
 
                 while maybe_signal.is_some() {
-                    match maybe_signal.expect("'is_some()' was checked prior to this call") {
+                    match maybe_signal.take().expect("is_some()") {
                         Signal::NewTask(task) => task.run(),
                         Signal::Pause(pauser) => pauser.pause_this_thread(),
                         Signal::Terminate => break,
                     }
-
-                    maybe_signal = match worker_channel_receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
+                    maybe_signal = match worker_channel_receiver.recv() {
                         Ok(signal) => Some(signal),
-                        Err(RecvTimeoutError::Timeout) => break,
                         Err(_) => break,
-                    };
+                    }
                 }
 
                 let _ = worker_status_sender.send(WorkerStatus::Terminating(id));

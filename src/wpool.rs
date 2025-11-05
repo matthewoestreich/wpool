@@ -21,9 +21,8 @@ pub struct WPool {
 }
 
 impl WPool {
-    pub fn new(max_workers: usize) -> Self {
-        let dispatcher = Arc::new(Dispatcher::new(max_workers));
-
+    // Private "quality-of-life" helper. Makes it so we don't have to update struct fields in multiple places.
+    fn new_base(max_workers: usize, dispatcher: Arc<Dispatcher>) -> Self {
         Self {
             dispatcher: dispatcher.spawn(),
             max_workers,
@@ -32,6 +31,16 @@ impl WPool {
             stop_once: Once::new(),
             stopped: false.into(),
         }
+    }
+
+    pub fn new(max_workers: usize) -> Self {
+        let dispatcher = Arc::new(Dispatcher::new(max_workers, 0));
+        Self::new_base(max_workers, dispatcher)
+    }
+
+    pub fn new_with_min(max_workers: usize, min_workers: usize) -> Self {
+        let dispatcher = Arc::new(Dispatcher::new(max_workers, min_workers));
+        Self::new_base(max_workers, dispatcher)
     }
 
     pub fn capacity(&self) -> usize {
@@ -70,7 +79,6 @@ impl WPool {
         self.shutdown(false);
     }
 
-    //
     // Pause all possible workers.
     //
     // - Blocks until all workers have acknowledged that they're paused.
@@ -88,7 +96,6 @@ impl WPool {
     //   are processed during `stop_wait()`.
     //
     // - If the pool is already paused, we ignore this call.
-    //
     pub fn pause(&self) {
         // We want to hold the pause lock for the entirety of the pause operation.
         let mut is_paused = safe_lock(&self.paused);
@@ -131,18 +138,14 @@ impl WPool {
 
     fn shutdown(&self, wait: bool) {
         self.stop_once.call_once(|| {
-            // Unpause any paused workers. If we aren't paused, this is essentially a no-op.
             self.resume();
             // Acquire pause lock to wait for any pauses in progress to complete
             let pause_lock = safe_lock(&self.paused);
             self.stopped.store(true, Ordering::SeqCst);
             drop(pause_lock);
-            // Let dispatcher know if it should process it's waiting queue before exiting.
-            self.dispatcher.set_should_wait(wait);
-            // Close the task channel.
+            self.dispatcher.set_is_wait(wait);
             self.dispatcher.close_task_channel();
         });
-        // Wait for the dispatcher thread to end before continuing
         self.dispatcher.join();
     }
 }
@@ -218,6 +221,29 @@ mod tests {
             ran_jobs < num_jobs,
             "expected ran jobs to be less than num_jobs : ran jobs = {ran_jobs} | num_jobs = {num_jobs}"
         );
+    }
+
+    #[test]
+    fn test_min_workers_basic() {
+        let max_workers = 5;
+        let min_workers = 3;
+
+        let wp = WPool::new_with_min(max_workers, min_workers);
+
+        for _ in 0..max_workers {
+            wp.submit(|| {
+                thread::sleep(Duration::from_millis(1));
+            });
+        }
+
+        // give pool time to process
+        thread::sleep(Duration::from_millis(5));
+        assert_eq!(wp.dispatcher.workers_len(), max_workers);
+
+        // Wait for workers to terminate
+        thread::sleep(WORKER_IDLE_TIMEOUT * min_workers as u32);
+
+        assert_eq!(wp.dispatcher.workers_len(), min_workers);
     }
 
     #[test]
@@ -471,7 +497,9 @@ mod tests {
             );
         }
 
+        println!("\nRUNNING FIRST SUB-TEST\n");
         first();
+        println!("\nRUNNING SECOND SUB-TEST\n");
         second();
     }
 
@@ -517,7 +545,7 @@ mod tests {
             pool_clone.pause();
         });
         // Wait enough for idle timeout to fire
-        thread::sleep(Duration::from_secs(3));
+        thread::sleep(WORKER_IDLE_TIMEOUT + Duration::from_millis(100));
         // Now resume and stop
         pool.resume();
         pool.stop_wait();
