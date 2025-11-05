@@ -9,6 +9,7 @@ This library is essentially a port of [`workerpool`](https://github.com/gammazer
 ```rust
 // At most 10 workers can run at once.
 let max_workers = 10;
+
 let pool = WPool::new(max_workers);
 
 // Submit as many functions as you'd like.
