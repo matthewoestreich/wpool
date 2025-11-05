@@ -2,5 +2,17 @@
 name = "wpool"
 version = "0.1.0"
 edition = "2024"
+authors = ["Matt Oestreich <github.com/matthewoestreich>"]
+description = "A thread pool that limits the number of tasks executing concurrently, without restricting how many tasks can be queued."
+license = "MIT"
+repository = "https://github.com/matthewoestreich/wpool"
+homepage = "https://github.com/matthewoestreich/wpool"
+readme = "README.md"
+keywords = ["async", "multithreading", "pool", "workerpool", "threadpool"]
+categories = ["asynchronous", "concurrency"]
 
 [dependencies]
+
+[lib]
+name = "wpool"
+path = "src/lib.rs"

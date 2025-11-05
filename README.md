@@ -1,5 +1,7 @@
 # wpool
 
+[![Crates.io](https://img.shields.io/crates/v/wpool.svg)](https://crates.io/crates/wpool)
+
 A thread pool that limits the number of tasks executing concurrently, without restricting how many tasks can be queued. Submitting tasks is non-blocking, so you can enqueue any number of tasks without waiting.
 
 This library is essentially a port of [`workerpool`](https://github.com/gammazero/workerpool), an amazing Go library.
