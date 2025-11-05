@@ -1,18 +1,94 @@
 #![allow(dead_code)]
-use std::sync::{
-    Arc, Mutex,
-    mpsc::{self, Receiver, RecvError, SendError, Sender, SyncSender, TryRecvError},
+use std::{
+    sync::{
+        Arc, Mutex,
+        mpsc::{self, RecvError, RecvTimeoutError, SendError, SyncSender, TryRecvError},
+    },
+    time::Duration,
 };
 
 use crate::safe_lock;
 
-pub(crate) struct ThreadSafeReceiver<T> {
-    inner: Arc<Mutex<Receiver<T>>>,
+pub(crate) fn bounded<T>(capacity: usize) -> Channel<T> {
+    let (tx, rx) = mpsc::sync_channel::<T>(capacity);
+    Channel {
+        kind: ChannelKind::Bounded {
+            sender: Sender::Bounded(Arc::new(Mutex::new(Some(tx)))),
+            receiver: Receiver::new(rx),
+        },
+    }
 }
 
-impl<T> ThreadSafeReceiver<T> {
-    pub(crate) fn new(inner: Arc<Mutex<Receiver<T>>>) -> Self {
-        Self { inner }
+pub(crate) fn unbounded<T>() -> Channel<T> {
+    let (tx, rx) = mpsc::channel::<T>();
+    Channel {
+        kind: ChannelKind::Unbounded {
+            sender: Sender::Unbounded(Arc::new(Mutex::new(Some(tx)))),
+            receiver: Receiver::new(rx),
+        },
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum Sender<T> {
+    Unbounded(Arc<Mutex<Option<mpsc::Sender<T>>>>),
+    Bounded(Arc<Mutex<Option<SyncSender<T>>>>),
+}
+
+impl<T> Sender<T> {
+    pub(crate) fn send(&self, msg: T) -> Result<(), SendError<T>> {
+        match self {
+            Self::Unbounded(tx) => {
+                if let Some(inner) = safe_lock(tx).as_ref() {
+                    inner.send(msg)
+                } else {
+                    Err(SendError(msg))
+                }
+            }
+            Self::Bounded(tx) => {
+                if let Some(inner) = safe_lock(tx).as_ref() {
+                    inner.send(msg)
+                } else {
+                    Err(SendError(msg))
+                }
+            }
+        }
+    }
+
+    pub(crate) fn close(&self) -> bool {
+        match self {
+            Self::Unbounded(tx) => safe_lock(tx).take().is_some(),
+            Self::Bounded(tx) => safe_lock(tx).take().is_some(),
+        }
+    }
+
+    pub(crate) fn is_closed(&self) -> bool {
+        match self {
+            Self::Unbounded(tx) => safe_lock(tx).is_none(),
+            Self::Bounded(tx) => safe_lock(tx).is_none(),
+        }
+    }
+}
+
+impl<T> Clone for Sender<T> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Unbounded(inner) => Self::Unbounded(Arc::clone(inner)),
+            Self::Bounded(inner) => Self::Bounded(Arc::clone(inner)),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct Receiver<T> {
+    inner: Arc<Mutex<mpsc::Receiver<T>>>,
+}
+
+impl<T> Receiver<T> {
+    fn new(inner: mpsc::Receiver<T>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(inner)),
+        }
     }
 
     pub(crate) fn recv(&self) -> Result<T, RecvError> {
@@ -22,110 +98,99 @@ impl<T> ThreadSafeReceiver<T> {
     pub(crate) fn try_recv(&self) -> Result<T, TryRecvError> {
         safe_lock(&self.inner).try_recv()
     }
-}
 
-#[derive(Default)]
-pub(crate) struct Channel<S, R> {
-    sender: S,
-    receiver: R,
-}
-
-impl<S, R> Channel<S, R> {
-    pub(crate) fn new(sender: S, receiver: R) -> Self {
-        Self { sender, receiver }
+    pub(crate) fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
+        safe_lock(&self.inner).recv_timeout(timeout)
     }
 }
 
-impl<T> Channel<Sender<T>, Arc<Mutex<Receiver<T>>>> {
-    pub(crate) fn send(&self, msg: T) -> Result<(), SendError<T>> {
-        self.sender.send(msg)
-    }
-
-    pub(crate) fn recv(&self) -> Result<T, RecvError> {
-        safe_lock(&self.receiver).recv()
-    }
-}
-
-impl<T> Channel<Mutex<Option<Sender<T>>>, Arc<Mutex<Receiver<T>>>> {
-    pub(crate) fn new_unbounded() -> Self {
-        let (tx, rx) = mpsc::channel::<T>();
+impl<T> Clone for Receiver<T> {
+    fn clone(&self) -> Self {
         Self {
-            sender: Some(tx).into(),
-            receiver: Arc::new(Mutex::new(rx)),
+            inner: Arc::clone(&self.inner),
         }
     }
+}
 
+pub(crate) enum ChannelKind<T> {
+    Unbounded {
+        sender: Sender<T>,
+        receiver: Receiver<T>,
+    },
+    Bounded {
+        sender: Sender<T>,
+        receiver: Receiver<T>,
+    },
+}
+
+impl<T> std::fmt::Debug for ChannelKind<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            ChannelKind::Bounded { .. } => write!(f, "ChannelKind::Bounded"),
+            ChannelKind::Unbounded { .. } => write!(f, "ChannelKind::Unbounded"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct Channel<T> {
+    kind: ChannelKind<T>,
+}
+
+impl<T> Channel<T> {
     pub(crate) fn send(&self, msg: T) -> Result<(), SendError<T>> {
-        if let Some(sender) = safe_lock(&self.sender).as_ref() {
-            sender.send(msg)
-        } else {
-            Err(SendError(msg))
+        match &self.kind {
+            ChannelKind::Unbounded { sender, .. } => sender.send(msg),
+            ChannelKind::Bounded { sender, .. } => sender.send(msg),
         }
     }
 
     pub(crate) fn recv(&self) -> Result<T, RecvError> {
-        safe_lock(&self.receiver).recv()
+        match &self.kind {
+            ChannelKind::Unbounded { receiver, .. } => receiver.recv(),
+            ChannelKind::Bounded { receiver, .. } => receiver.recv(),
+        }
+    }
+
+    pub(crate) fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
+        match &self.kind {
+            ChannelKind::Unbounded { receiver, .. } => receiver.recv_timeout(timeout),
+            ChannelKind::Bounded { receiver, .. } => receiver.recv_timeout(timeout),
+        }
     }
 
     pub(crate) fn try_recv(&self) -> Result<T, TryRecvError> {
-        safe_lock(&self.receiver).try_recv()
+        match &self.kind {
+            ChannelKind::Unbounded { receiver, .. } => receiver.try_recv(),
+            ChannelKind::Bounded { receiver, .. } => receiver.try_recv(),
+        }
     }
 
-    pub(crate) fn clone_sender(&self) -> Option<Sender<T>> {
-        safe_lock(&self.sender).clone()
+    pub(crate) fn clone_sender(&self) -> Sender<T> {
+        match &self.kind {
+            ChannelKind::Unbounded { sender, .. } => sender.clone(),
+            ChannelKind::Bounded { sender, .. } => sender.clone(),
+        }
     }
 
-    pub(crate) fn clone_receiver(&self) -> ThreadSafeReceiver<T> {
-        ThreadSafeReceiver::new(Arc::clone(&self.receiver))
+    pub(crate) fn clone_receiver(&self) -> Receiver<T> {
+        match &self.kind {
+            ChannelKind::Unbounded { receiver, .. } => receiver.clone(),
+            ChannelKind::Bounded { receiver, .. } => receiver.clone(),
+        }
     }
 
     pub(crate) fn close(&self) -> bool {
-        if let Some(sender) = safe_lock(&self.sender).take() {
-            drop(sender);
-            return true;
-        }
-        false
-    }
-}
-
-impl<T> Channel<Mutex<Option<SyncSender<T>>>, Arc<Mutex<Receiver<T>>>> {
-    pub(crate) fn new_bounded(capacity: usize) -> Self {
-        let (tx, rx) = mpsc::sync_channel::<T>(capacity);
-        Self {
-            sender: Mutex::new(Some(tx)),
-            receiver: Arc::new(Mutex::new(rx)),
+        match &self.kind {
+            ChannelKind::Unbounded { sender, .. } => sender.close(),
+            ChannelKind::Bounded { sender, .. } => sender.close(),
         }
     }
 
-    pub(crate) fn send(&self, msg: T) -> Result<(), SendError<T>> {
-        if let Some(sender) = safe_lock(&self.sender).as_ref() {
-            sender.send(msg)
-        } else {
-            Err(SendError(msg))
+    pub(crate) fn is_closed(&self) -> bool {
+        match &self.kind {
+            ChannelKind::Unbounded { sender, .. } => sender.is_closed(),
+            ChannelKind::Bounded { sender, .. } => sender.is_closed(),
         }
-    }
-
-    pub(crate) fn recv(&self) -> Result<T, RecvError> {
-        safe_lock(&self.receiver).recv()
-    }
-
-    pub(crate) fn try_recv(&self) -> Result<T, TryRecvError> {
-        safe_lock(&self.receiver).try_recv()
-    }
-
-    pub(crate) fn clone_sender(&self) -> Option<SyncSender<T>> {
-        safe_lock(&self.sender).clone()
-    }
-
-    pub(crate) fn clone_receiver(&self) -> Arc<Mutex<Receiver<T>>> {
-        Arc::clone(&self.receiver)
-    }
-
-    pub(crate) fn close(&self) -> bool {
-        if let Some(sender) = safe_lock(&self.sender).take() {
-            drop(sender);
-            return true;
-        }
-        false
     }
 }

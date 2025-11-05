@@ -160,7 +160,7 @@ mod tests {
         time::Duration,
     };
 
-    use crate::{channel::Channel, safe_lock, worker::WORKER_IDLE_TIMEOUT, wpool::WPool};
+    use crate::{channel::unbounded, safe_lock, worker::WORKER_IDLE_TIMEOUT, wpool::WPool};
 
     #[test]
     fn test_basic() {
@@ -531,7 +531,7 @@ mod tests {
         let max_workers = 2;
         let num_jobs = 64;
         let expected_len = 62;
-        let release_chan = Channel::new_unbounded();
+        let release_chan = unbounded();
         let p = WPool::new(max_workers);
         // Start workers, and have them all wait on a channel before completing.
         for _ in 0..num_jobs {
@@ -544,7 +544,7 @@ mod tests {
         // Start a thread to free the workers after calling stop.  This way
         // the dispatcher can exit, then when this thread runs, the pool
         // can exit.
-        let release_thread_sender = release_chan.clone_sender().unwrap();
+        let release_thread_sender = release_chan.clone_sender();
         let release_handle = thread::spawn(move || {
             for _ in 0..num_jobs {
                 let _ = release_thread_sender.send(());
@@ -668,11 +668,11 @@ mod tests {
         let mut handles = Vec::<thread::JoinHandle<()>>::new();
 
         let wp = Arc::new(WPool::new(max_workers));
-        let max_chan = Channel::new_unbounded();
+        let max_chan = unbounded();
 
         for _ in 0..num_threads {
             let thread_pool = Arc::clone(&wp);
-            let max_chan_tx_clone = max_chan.clone_sender().unwrap();
+            let max_chan_tx_clone = max_chan.clone_sender();
             handles.push(thread::spawn(move || {
                 let mut max = 0;
                 for _ in 0..num_jobs {

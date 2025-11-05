@@ -1,13 +1,9 @@
-use std::{
-    sync::{
-        Arc, Mutex,
-        mpsc::{Receiver, RecvTimeoutError, Sender},
-    },
-    thread,
-    time::Duration,
-};
+use std::{sync::mpsc::RecvTimeoutError, thread, time::Duration};
 
-use crate::{job::Signal, safe_lock};
+use crate::{
+    channel::{Receiver, Sender},
+    job::Signal,
+};
 
 pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -24,7 +20,7 @@ impl Worker {
     pub(crate) fn spawn(
         id: usize,
         signal: Signal,
-        worker_channel_receiver: Arc<Mutex<Receiver<Signal>>>,
+        worker_channel_receiver: Receiver<Signal>,
         worker_status_sender: Sender<WorkerStatus>,
     ) -> Self {
         Self {
@@ -38,9 +34,7 @@ impl Worker {
                         Signal::Terminate => break,
                     }
 
-                    maybe_signal = match safe_lock(&worker_channel_receiver)
-                        .recv_timeout(WORKER_IDLE_TIMEOUT)
-                    {
+                    maybe_signal = match worker_channel_receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
                         Ok(signal) => Some(signal),
                         Err(RecvTimeoutError::Timeout) => break,
                         Err(_) => break,

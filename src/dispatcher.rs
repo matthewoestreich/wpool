@@ -3,21 +3,17 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver, Sender, SyncSender, TryRecvError},
+        mpsc::TryRecvError,
     },
     thread,
 };
 
 use crate::{
-    channel::Channel,
+    channel::{Channel, bounded, unbounded},
     job::Signal,
     monotonic_counter, safe_lock,
     worker::{Worker, WorkerStatus},
 };
-
-// These are just type aliases, makes reading legible
-pub(crate) type BoundedChannel<T> = Channel<Mutex<Option<SyncSender<T>>>, Arc<Mutex<Receiver<T>>>>;
-pub(crate) type UnboundedChannel<T> = Channel<Mutex<Option<Sender<T>>>, Arc<Mutex<Receiver<T>>>>;
 
 //
 // Dispatcher is meant to route signals to workers, spawn and/or kil workers,
@@ -44,9 +40,9 @@ pub(crate) struct Dispatcher {
     waiting_queue: Mutex<VecDeque<Signal>>,
     handle: Mutex<Option<thread::JoinHandle<()>>>,
     has_spawned: AtomicBool,
-    worker_channel: BoundedChannel<Signal>,
-    task_channel: UnboundedChannel<Signal>,
-    worker_status_channel: UnboundedChannel<WorkerStatus>,
+    worker_channel: Channel<Signal>,
+    task_channel: Channel<Signal>,
+    worker_status_channel: Channel<WorkerStatus>,
     max_workers: usize,
 }
 
@@ -58,9 +54,9 @@ impl Dispatcher {
             wait: false.into(),
             max_workers,
             waiting_queue: VecDeque::new().into(),
-            worker_channel: Channel::new_bounded(0),
-            worker_status_channel: Channel::new_unbounded(),
-            task_channel: Channel::new_unbounded(),
+            worker_channel: bounded(0),
+            worker_status_channel: unbounded(),
+            task_channel: unbounded(),
             workers: HashMap::new().into(),
         }
     }
@@ -113,14 +109,17 @@ impl Dispatcher {
 
                 if dispatcher.workers_len() >= dispatcher.max_workers {
                     dispatcher.waiting_queue_push_back(signal);
-                } else if let Some(worker_status_sender) =
-                    dispatcher.worker_status_channel.clone_sender()
-                {
+                } else {
                     let id = get_next_id();
+                    let status_sender = dispatcher.worker_status_channel.clone_sender();
                     let worker_receiver = dispatcher.worker_channel.clone_receiver();
-                    let worker = Worker::spawn(id, signal, worker_receiver, worker_status_sender);
+                    let worker = Worker::spawn(id, signal, worker_receiver, status_sender);
                     dispatcher.add_worker_to_cache(id, worker);
                 }
+                //else if let Some(worker_status_sender) =
+                //    dispatcher.worker_status_channel.clone_sender()
+                //{
+                //}
             }
 
             if dispatcher.should_wait() {

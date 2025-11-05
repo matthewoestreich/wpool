@@ -1,9 +1,6 @@
-use std::sync::{
-    Arc, Mutex,
-    mpsc::{self, Receiver, Sender},
-};
+use std::sync::Arc;
 
-use crate::channel::Channel;
+use crate::channel::{Channel, unbounded};
 
 //
 // Pauser is a 'quality-of-life' wrapper to simplify thread sync between
@@ -53,18 +50,15 @@ use crate::channel::Channel;
 //      ```
 //
 pub(crate) struct Pauser {
-    ack_chan: Channel<Sender<()>, Arc<Mutex<Receiver<()>>>>,
-    pause_chan: Channel<Sender<()>, Arc<Mutex<Receiver<()>>>>,
+    ack_chan: Channel<()>,
+    pause_chan: Channel<()>,
 }
 
 impl Pauser {
     pub(crate) fn new() -> Arc<Self> {
-        let (ack_tx, ack_rx) = mpsc::channel();
-        let (pause_tx, pause_rx) = mpsc::channel();
-
         Arc::new(Self {
-            ack_chan: Channel::new(ack_tx, Mutex::new(ack_rx).into()),
-            pause_chan: Channel::new(pause_tx, Mutex::new(pause_rx).into()),
+            ack_chan: unbounded(),
+            pause_chan: unbounded(),
         })
     }
 
