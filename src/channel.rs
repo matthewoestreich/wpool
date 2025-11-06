@@ -61,10 +61,7 @@ impl<T> Sender<T> {
         match self {
             Sender::Bounded(tx) => {
                 if let Some(inner) = safe_lock(tx).as_ref() {
-                    match inner.try_send(msg) {
-                        Ok(_) => Ok(()),
-                        Err(e) => Err(e),
-                    }
+                    inner.try_send(msg)
                 } else {
                     Err(TrySendError::Disconnected(msg))
                 }
