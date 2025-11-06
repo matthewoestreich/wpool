@@ -10,22 +10,38 @@ use std::{
     time::Duration,
 };
 
-use crate::{channel::unbounded, safe_lock, worker::WORKER_IDLE_TIMEOUT, wpool::WPool};
+use crate::{
+    channel::unbounded,
+    safe_lock,
+    wait_group::WaitGroup,
+    wpool::{WORKER_IDLE_TIMEOUT, WPool},
+};
 
 // Runs a test `n_times` in a row.
 // failure_threshold : If this many runs fail this test willl fail. If 'failure_threshold' = 2, if 3 jobs fail, this job fails.
 fn run_test_n_times<F>(n_times: usize, failure_threshold: usize, test_fn: F)
 where
-    F: Fn() + Send + UnwindSafe + RefUnwindSafe + 'static,
+    F: FnOnce() + Send + Sync + Clone + Copy + UnwindSafe + RefUnwindSafe + 'static,
 {
     let mut failed_iterations: Vec<(usize, String)> = Vec::new();
+    let thread_safe_test_fn = Arc::new(test_fn);
 
     for i in 0..n_times {
-        println!("JOB {i}");
+        println!("\n--------------------- JOB {i} ---------------------");
 
-        let result = panic::catch_unwind(|| {
-            test_fn();
+        let thread_fn = Arc::clone(&thread_safe_test_fn);
+        let (release_tx, release_rx) = mpsc::sync_channel(0);
+        let release_sender = release_tx.clone();
+
+        let handle = thread::spawn(move || {
+            let result = panic::catch_unwind(|| {
+                thread_fn();
+            });
+            let _ = release_sender.send(result);
         });
+
+        let result = release_rx.recv().unwrap();
+        let _ = handle.join();
 
         if let Err(e) = result {
             let msg = if let Some(s) = e.downcast_ref::<&str>() {
@@ -37,6 +53,13 @@ where
             };
             failed_iterations.push((i, msg));
         }
+    }
+
+    if !failed_iterations.is_empty() {
+        println!(
+            "\n\n------------------------------------------ Failed Iterations ------------------------------------------\n\n{:#?}\n\n-------------------------------------------------------------------------------------------------------",
+            failed_iterations
+        );
     }
 
     assert!(
@@ -66,6 +89,46 @@ where
     if rx.recv_timeout(timeout).is_err() {
         panic!("test timed out after {timeout:#?}");
     }
+}
+
+#[test]
+fn test_overflow_stress() {
+    run_test_n_times(100, 0, test_overflow);
+}
+
+#[test]
+fn test_overflow() {
+    let max_workers = 2;
+    let num_jobs = 64;
+    let expected_len = 62;
+    let release_chan = unbounded();
+    let p = WPool::new(max_workers);
+    // Start workers, and have them all wait on a channel before completing.
+    for _ in 0..num_jobs {
+        let thread_release_receiver = release_chan.clone_receiver();
+        p.submit(move || {
+            let _ = thread_release_receiver.recv();
+        });
+    }
+
+    // Start a thread to free the workers after calling stop.  This way
+    // the dispatcher can exit, then when this thread runs, the pool
+    // can exit.
+    let release_thread_sender = release_chan.clone_sender();
+    let release_handle = thread::spawn(move || {
+        for _ in 0..num_jobs {
+            let _ = release_thread_sender.send(());
+        }
+    });
+    p.stop();
+    // Now that the pool has exited, it is safe to inspect its waiting
+    // queue without causing a race.
+    let wq_len = p._waiting_queue_len();
+    assert_eq!(
+        wq_len, expected_len,
+        "Expected waiting to queue to have len of '{expected_len}' but got '{wq_len}'"
+    );
+    let _ = release_handle.join();
 }
 
 #[test]
@@ -141,12 +204,10 @@ fn test_min_workers_basic() {
 
     // give pool time to process
     thread::sleep(Duration::from_millis(5));
-    assert_eq!(wp.dispatcher.workers_len(), max_workers);
-
+    assert_eq!(wp.worker_count.load(Ordering::SeqCst), max_workers);
     // Wait for workers to terminate
-    thread::sleep(WORKER_IDLE_TIMEOUT * min_workers as u32);
-
-    assert_eq!(wp.dispatcher.workers_len(), min_workers);
+    thread::sleep(WORKER_IDLE_TIMEOUT * ((min_workers + 1) as u32));
+    assert_eq!(wp.worker_count.load(Ordering::SeqCst), min_workers);
 }
 
 #[test]
@@ -195,9 +256,9 @@ fn test_idle_worker() {
     }
 
     // Ensure all workers have passed the timeout
-    thread::sleep((WORKER_IDLE_TIMEOUT * (max_workers as u32)) + Duration::from_millis(250));
+    thread::sleep(WORKER_IDLE_TIMEOUT * ((max_workers + 1) as u32));
     p.stop_wait();
-    assert_eq!(p.dispatcher.workers_len(), 0);
+    assert_eq!(p.worker_count.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -302,12 +363,9 @@ fn test_pause() {
     }
 
     // Check that task was enqueued
-    assert_eq!(
-        wp.dispatcher._waiting_queue_len(),
-        1,
-        "waiting queue size should be 1"
-    );
+    assert_eq!(wp._waiting_queue_len(), 1, "waiting queue size should be 1");
 
+    println!("made it to stop");
     wp.stop();
 }
 
@@ -458,41 +516,6 @@ fn test_worker_timeout_during_pause() {
 }
 
 #[test]
-fn test_overflow() {
-    let max_workers = 2;
-    let num_jobs = 64;
-    let expected_len = 62;
-    let release_chan = unbounded();
-    let p = WPool::new(max_workers);
-    // Start workers, and have them all wait on a channel before completing.
-    for _ in 0..num_jobs {
-        let thread_release_receiver = release_chan.clone_receiver();
-        p.submit(move || {
-            let _ = thread_release_receiver.recv();
-        });
-    }
-
-    // Start a thread to free the workers after calling stop.  This way
-    // the dispatcher can exit, then when this thread runs, the pool
-    // can exit.
-    let release_thread_sender = release_chan.clone_sender();
-    let release_handle = thread::spawn(move || {
-        for _ in 0..num_jobs {
-            let _ = release_thread_sender.send(());
-        }
-    });
-    p.stop();
-    // Now that the pool has exited, it is safe to inspect its waiting
-    // queue without causing a race.
-    let wq_len = p.dispatcher._waiting_queue_len();
-    assert_eq!(
-        wq_len, expected_len,
-        "Expected waiting to queue to have len of '{expected_len}' but got '{wq_len}'"
-    );
-    let _ = release_handle.join();
-}
-
-#[test]
 #[ignore]
 fn test_wait_queue_len_race_2() {
     let max_workers = 5;
@@ -511,7 +534,7 @@ fn test_wait_queue_len_race_2() {
             }
             println!(
                 "[len_checker] wait_que_len={}",
-                safe_lock(&wp_len_checker).dispatcher._waiting_queue_len()
+                safe_lock(&wp_len_checker)._waiting_queue_len()
             );
             //thread::yield_now();
         }
@@ -528,7 +551,7 @@ fn test_wait_queue_len_race_2() {
                 });
                 println!(
                     "[worker][thread={t}][job={j}] wait_queue_len={}",
-                    wp_lock.dispatcher._waiting_queue_len()
+                    wp_lock._waiting_queue_len()
                 );
             }
         }));
@@ -541,58 +564,12 @@ fn test_wait_queue_len_race_2() {
     let _ = len_checker_thread.join();
 }
 
-//
-// TODO : THIS TEST NEEDS A THRESHOLD OF 0 REALISTICALLY, I AM TRYING TO FIGURE OUT THE ISSUE
-//
 #[test]
-fn test_waiting_queue_len_race_100_times() {
-    // If this many runs fail this test willl fail.
-    // If 'failure_threshold' = 2, if 3 jobs fail, this job fails.
-    let failure_threshold = 3;
-    let num_runs = 100;
-    let mut failed_iterations: Vec<(usize, String)> = Vec::new();
-    let mut max = 0;
-    for i in 0..num_runs {
-        println!("JOB {i}");
-        let result = panic::catch_unwind(waiting_queue_len_race);
-        #[allow(clippy::single_match)]
-        match result {
-            Err(e) => {
-                // The panic payload is a Box<dyn Any + Send>
-                if let Some(&s) = e.downcast_ref::<&str>() {
-                    failed_iterations.push((i, s.to_string()));
-                } else {
-                    failed_iterations.push((i, "-".to_string()));
-                }
-                break;
-            }
-            Ok(thread_max) => {
-                if max < thread_max {
-                    max = thread_max;
-                }
-            }
-        }
-
-        thread::sleep(Duration::from_millis(1));
-    }
-    println!("MAX : {max}\n");
-    assert!(
-        if failure_threshold == 0 {
-            failed_iterations.is_empty()
-        } else {
-            failed_iterations.len() < failure_threshold
-        },
-        "expected this to fail at most {failure_threshold} times, instead it failed {}/{num_runs}",
-        failed_iterations.len()
-    );
+fn test_wq_race() {
+    run_test_n_times(100, 0, waiting_queue_len_race);
 }
 
-//#[test]
-//fn test_wq_race() {
-//    waiting_queue_len_race();
-//}
-
-fn waiting_queue_len_race() -> usize {
+fn waiting_queue_len_race() {
     let num_threads = 10;
     let num_jobs = 20;
     let max_workers = 5;
@@ -610,7 +587,7 @@ fn waiting_queue_len_race() -> usize {
                 thread_pool.submit(move || {
                     thread::sleep(Duration::from_micros(2));
                 });
-                let waiting = thread_pool.dispatcher._waiting_queue_len();
+                let waiting = thread_pool._waiting_queue_len();
                 if waiting > max {
                     max = waiting;
                 }
@@ -641,7 +618,6 @@ fn waiting_queue_len_race() -> usize {
         "should not have seen all tasks on waiting queue"
     );
     wp.stop_wait();
-    final_max
 }
 
 #[test]
@@ -825,4 +801,32 @@ fn test_multiple_stop() {
     p.stop();
     p.stop();
     // No need to assert anything, if this panics the test will fail.
+}
+
+#[test]
+fn test_wait_group_done_wait_race() {
+    // Ensure there is not a race when calling done() before wait()
+    run_test_with_timeout(Duration::from_secs(5), || {
+        let wg = WaitGroup::new();
+        wg.add(1);
+        thread::spawn({
+            let wg = wg.clone();
+            move || {
+                // done() happens before wait() starts waiting
+                wg.done();
+            }
+        });
+        // Ensure done() happens before wait()
+        thread::sleep(Duration::from_millis(750));
+        wg.wait();
+    });
+
+    println!("\n-----------------------------------\n");
+
+    run_test_with_timeout(Duration::from_secs(5), || {
+        let wg = WaitGroup::new();
+        wg.add(1);
+        wg.done();
+        wg.wait();
+    });
 }

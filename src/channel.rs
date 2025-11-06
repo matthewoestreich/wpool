@@ -2,7 +2,9 @@
 use std::{
     sync::{
         Arc, Mutex,
-        mpsc::{self, RecvError, RecvTimeoutError, SendError, SyncSender, TryRecvError},
+        mpsc::{
+            self, RecvError, RecvTimeoutError, SendError, SyncSender, TryRecvError, TrySendError,
+        },
     },
     time::Duration,
 };
@@ -50,6 +52,31 @@ impl<T> Sender<T> {
                     inner.send(msg)
                 } else {
                     Err(SendError(msg))
+                }
+            }
+        }
+    }
+
+    pub(crate) fn try_send(&self, msg: T) -> Result<(), TrySendError<T>> {
+        match self {
+            Sender::Bounded(tx) => {
+                if let Some(inner) = safe_lock(tx).as_ref() {
+                    match inner.try_send(msg) {
+                        Ok(_) => Ok(()),
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    Err(TrySendError::Disconnected(msg))
+                }
+            }
+            Sender::Unbounded(tx) => {
+                if let Some(inner) = safe_lock(tx).as_ref() {
+                    match inner.send(msg) {
+                        Ok(_) => Ok(()),
+                        Err(SendError(sent)) => Err(TrySendError::Disconnected(sent)),
+                    }
+                } else {
+                    Err(TrySendError::Disconnected(msg))
                 }
             }
         }
