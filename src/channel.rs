@@ -70,7 +70,7 @@ impl<T> Sender<T> {
                 if let Some(inner) = safe_lock(tx).as_ref() {
                     match inner.send(msg) {
                         Ok(_) => Ok(()),
-                        Err(SendError(sent)) => Err(TrySendError::Disconnected(sent)),
+                        Err(SendError(msg)) => Err(TrySendError::Disconnected(msg)),
                     }
                 } else {
                     Err(TrySendError::Disconnected(msg))
