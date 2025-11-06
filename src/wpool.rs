@@ -260,7 +260,7 @@ impl WPool {
                 };
 
                 match worker_sender.try_send(signal) {
-                    Ok(_) => continue,
+                    Ok(_) => { /* Noop */ }
                     Err(TrySendError::Disconnected(_)) => {
                         println!(
                             "dispatch -> send signal to workers -> WORKER CHAN CLOSED, BREAKING MAIN LOOP."
@@ -275,9 +275,10 @@ impl WPool {
                             Self::spawn_worker(signal, wait_group.clone(), worker_receiver.clone());
                             worker_count.fetch_add(1, Ordering::SeqCst);
                         }
-                        is_idle = false;
                     }
                 };
+
+                is_idle = false;
             }
 
             if status.load(Ordering::SeqCst) == WPoolStatus::Stopped(true).as_u8() {
