@@ -70,6 +70,7 @@ impl WPool {
         self.min_workers
     }
 
+    /// The number of active workers.
     pub fn worker_count(&self) -> usize {
         self.worker_count.load(Ordering::SeqCst)
     }
