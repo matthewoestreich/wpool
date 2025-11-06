@@ -66,15 +66,8 @@ impl<T> Sender<T> {
                     Err(TrySendError::Disconnected(msg))
                 }
             }
-            Sender::Unbounded(tx) => {
-                if let Some(inner) = safe_lock(tx).as_ref() {
-                    match inner.send(msg) {
-                        Ok(_) => Ok(()),
-                        Err(SendError(msg)) => Err(TrySendError::Disconnected(msg)),
-                    }
-                } else {
-                    Err(TrySendError::Disconnected(msg))
-                }
+            Sender::Unbounded(_) => {
+                panic!("Need to fix this, but unbound Sender does not have a try_send method!");
             }
         }
     }

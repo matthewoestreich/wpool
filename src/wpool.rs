@@ -80,7 +80,7 @@ impl WPool {
         Self::new_base(max_workers, 0)
     }
 
-    /// `new` creates and starts a pool of worker threads.
+    /// `new_with_min` creates and starts a pool of worker threads.
     ///
     /// The `max_workers` parameter specifies the maximum number of workers that can
     /// execute tasks concurrently. When there are no incoming tasks, workers are
