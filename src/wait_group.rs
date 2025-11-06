@@ -18,7 +18,7 @@ struct WaitGroupInner {
 
 impl WaitGroup {
     pub(crate) fn new() -> Self {
-        WaitGroup {
+        Self {
             inner: Arc::new(WaitGroupInner {
                 count: AtomicUsize::new(0),
                 cvar: Condvar::new(),
