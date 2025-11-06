@@ -21,56 +21,21 @@ pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 /// `WPool` is a thread pool that limits the number of tasks executing concurrently,
 /// without restricting how many tasks can be queued. Submitting tasks is non-blocking,
 /// so you can enqueue any number of tasks without waiting.
-#[allow(dead_code)]
 pub struct WPool {
-    max_workers: usize,
-    pause_lock: Mutex<()>,
-    pause_channel: Channel<()>,
-    stop_once: Once,
     dispatch_handle: Mutex<Option<thread::JoinHandle<()>>>,
+    max_workers: usize,
     min_workers: usize,
+    pause_channel: Channel<()>,
+    pause_lock: Mutex<()>,
     status: Arc<AtomicU8>,
+    stop_once: Once,
     task_sender: Sender<Signal>,
+    #[allow(dead_code)]
     waiting_queue: Arc<Mutex<VecDeque<Signal>>>,
-    worker_channel: Channel<Signal>,
-    pub(crate) worker_count: Arc<AtomicUsize>,
+    worker_count: Arc<AtomicUsize>,
 }
 
 impl WPool {
-    // Private "quality-of-life" helper. Makes it so we don't have to update struct fields in multiple places.
-    fn new_base(max_workers: usize, min_workers: usize) -> Self {
-        let status = Arc::new(AtomicU8::new(WPoolStatus::Running.as_u8()));
-        let worker_count = Arc::new(AtomicUsize::new(0));
-        let waiting_queue = Arc::new(Mutex::new(VecDeque::new()));
-        let worker_channel = bounded(0);
-        let task_channel = unbounded();
-
-        let dispatch_handle = Self::dispatch(
-            max_workers,
-            min_workers,
-            Arc::clone(&status),
-            Arc::clone(&worker_count),
-            Arc::clone(&waiting_queue),
-            task_channel.clone_receiver(),
-            worker_channel.clone_sender(),
-            worker_channel.clone_receiver(),
-        );
-
-        Self {
-            max_workers,
-            min_workers,
-            status,
-            pause_lock: Mutex::new(()),
-            pause_channel: bounded(0),
-            stop_once: Once::new(),
-            dispatch_handle: Mutex::new(Some(dispatch_handle)),
-            task_sender: task_channel.clone_sender(),
-            waiting_queue,
-            worker_channel,
-            worker_count,
-        }
-    }
-
     /// `new` creates and starts a pool of worker threads.
     ///
     /// The `max_workers` parameter specifies the maximum number of workers that can
@@ -103,6 +68,10 @@ impl WPool {
     /// The number of `min_workers`.
     pub fn min_capacity(&self) -> usize {
         self.min_workers
+    }
+
+    pub fn worker_count(&self) -> usize {
+        self.worker_count.load(Ordering::SeqCst)
     }
 
     /// Enqueues the given function.
@@ -213,6 +182,42 @@ impl WPool {
 
     /************************* Private methods ***************************************/
 
+    // Private "quality-of-life" helper. Makes it so we don't have to update struct fields in multiple places.
+    fn new_base(max_workers: usize, min_workers: usize) -> Self {
+        let status = Arc::new(AtomicU8::new(WPoolStatus::Running.as_u8()));
+        let worker_count = Arc::new(AtomicUsize::new(0));
+        let waiting_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let worker_channel = bounded(0);
+        let task_channel = unbounded();
+
+        let dispatch_handle = Self::dispatch(
+            max_workers,
+            min_workers,
+            Arc::clone(&status),
+            Arc::clone(&worker_count),
+            Arc::clone(&waiting_queue),
+            task_channel.clone_receiver(),
+            worker_channel.clone_sender(),
+            worker_channel.clone_receiver(),
+        );
+
+        Self {
+            dispatch_handle: Mutex::new(Some(dispatch_handle)),
+            max_workers,
+            min_workers,
+            pause_channel: bounded(0),
+            pause_lock: Mutex::new(()),
+            status,
+            stop_once: Once::new(),
+            task_sender: task_channel.clone_sender(),
+            waiting_queue,
+            worker_count,
+        }
+    }
+
+    /// `dispatch` starts our dispatcher thread. It is responsible for receiving
+    /// tasks, dispatching tasks to workers, spawning workers, killing workers
+    /// during pool shutdown, and more.
     fn dispatch(
         max_workers: usize,
         min_workers: usize,
@@ -223,19 +228,12 @@ impl WPool {
         worker_sender: Sender<Signal>,
         worker_receiver: Receiver<Signal>,
     ) -> thread::JoinHandle<()> {
-        // This is the "main dispatcher thread".
-        // It is responsible for receiving tasks, dispatching tasks to workers, spawning
-        // workers, killing workers during pool shutdown, holding the 'source of truth'
-        // list for all spawned worker threads, and more.
         thread::spawn(move || {
             let mut is_idle = false;
             let wait_group = WaitGroup::new();
 
             loop {
-                // As long as the waiting queue isn't empty, incoming signals (on task channel)
-                // are put into the waiting queue and signals to run are taken from the waiting
-                // queue. Once the waiting queue is empty, then go back to submitting incoming
-                // signals directly to available workers.
+                // See `process_waiting_queue` method for more notes on this.
                 if !safe_lock(&waiting_queue).is_empty() {
                     if !Self::process_waiting_queue(
                         Arc::clone(&waiting_queue),
@@ -295,6 +293,8 @@ impl WPool {
         })
     }
 
+    /// `spawn_worker` spawns a new thread that acts as a worker. Unless the pool using `min_workers`,
+    /// a worker will timeout after an entire cycle of being idle. The idle timeout cycle is ~4 seconds.
     fn spawn_worker(signal: Signal, wait_group: WaitGroup, worker_receiver: Receiver<Signal>) {
         thread::spawn(move || {
             let mut signal_opt = Some(signal);
@@ -317,6 +317,11 @@ impl WPool {
         });
     }
 
+    /// Processes tasks within the waiting queue.
+    /// As long as the waiting queue isn't empty, incoming signals (on task channel)
+    /// are put into the waiting queue and signals to run are taken from the waiting
+    /// queue. Once the waiting queue is empty, then go back to submitting incoming
+    /// signals directly to available workers.
     fn process_waiting_queue(
         waiting_queue: Arc<Mutex<VecDeque<Signal>>>,
         task_receiver: Receiver<Signal>,
@@ -338,6 +343,7 @@ impl WPool {
         true
     }
 
+    /// Essentially drains the wait_queue.
     fn run_queued_tasks(
         waiting_queue: Arc<Mutex<VecDeque<Signal>>>,
         worker_sender: Sender<Signal>,
@@ -352,7 +358,7 @@ impl WPool {
         }
     }
 
-    // "Quality-of-life" function, easier to submit signals directly to the dispatcher.
+    /// Submit a Signal to the "task channel".
     fn submit_signal(&self, signal: Signal) {
         if self.is_stopped() {
             return;

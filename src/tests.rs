@@ -204,10 +204,10 @@ fn test_min_workers_basic() {
 
     // give pool time to process
     thread::sleep(Duration::from_millis(5));
-    assert_eq!(wp.worker_count.load(Ordering::SeqCst), max_workers);
+    assert_eq!(wp.worker_count(), max_workers);
     // Wait for workers to terminate
     thread::sleep(WORKER_IDLE_TIMEOUT * ((min_workers + 1) as u32));
-    assert_eq!(wp.worker_count.load(Ordering::SeqCst), min_workers);
+    assert_eq!(wp.worker_count(), min_workers);
 }
 
 #[test]
@@ -258,7 +258,7 @@ fn test_idle_worker() {
     // Ensure all workers have passed the timeout
     thread::sleep(WORKER_IDLE_TIMEOUT * ((max_workers + 1) as u32));
     p.stop_wait();
-    assert_eq!(p.worker_count.load(Ordering::SeqCst), 0);
+    assert_eq!(p.worker_count(), 0);
 }
 
 #[test]
