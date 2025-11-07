@@ -11,10 +11,9 @@ use std::{
 };
 
 use crate::{
-    ThreadedDeque,
+    ThreadedDeque, WaitGroup,
     channel::{bounded, unbounded},
     safe_lock,
-    wait_group::WaitGroup,
     wpool::{WORKER_IDLE_TIMEOUT, WPool},
 };
 

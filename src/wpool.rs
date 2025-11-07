@@ -9,10 +9,9 @@ use std::{
 };
 
 use crate::{
-    Signal, Task, ThreadedDeque, WPoolStatus,
+    Signal, Task, ThreadedDeque, WPoolStatus, WaitGroup,
     channel::{Channel, Receiver, Sender, bounded, unbounded},
     safe_lock,
-    wait_group::WaitGroup,
 };
 
 pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
