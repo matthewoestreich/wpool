@@ -256,6 +256,7 @@ impl WPool {
                 let signal = match task_receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
                     Ok(signal) => signal,
                     Err(RecvTimeoutError::Timeout) => {
+                        // Keep `min_workers` alive.
                         if is_idle && worker_count.load(Ordering::SeqCst) > min_workers {
                             let _ = worker_sender.send(Signal::Terminate);
                             worker_count.fetch_sub(1, Ordering::SeqCst);
@@ -309,11 +310,14 @@ impl WPool {
             }
             Err(TryRecvError::Empty) => {
                 let mut waiting_queue = safe_lock(&waiting_queue);
+                // Get a reference to the element at the front of waiting queue, if exists.
+                // This does not modify the waiting queue!
                 if let Some(signal) = waiting_queue.front()
+                    // Clone the item at front, and try to send it to a worker.
                     && let Ok(_) = worker_sender.try_send(signal.clone())
                 {
-                    // Only pop off waitiing queue once we know the signal
-                    // was successfully passed into the worker channel.
+                    // Only pop off (modify) waitiing queue once we know the
+                    // signal was successfully passed into the worker channel.
                     waiting_queue.pop_front();
                 }
             }
