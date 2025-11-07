@@ -916,15 +916,10 @@ fn test_stop_race() {
 
         let timeout = Duration::from_secs(1);
         for _ in 0..done_callers {
-            let timed_out = true;
-            let should_timeout = false;
             if let Err(RecvTimeoutError::Timeout) = stop_done.recv_timeout(timeout) {
                 wp.stop();
                 // Just to give us something to assert...
-                assert_eq!(
-                    timed_out, should_timeout,
-                    "timedout waiting for `stop()` to return"
-                );
+                panic!("timedout waiting for `stop()` to return");
             };
         }
     });
