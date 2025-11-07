@@ -926,6 +926,22 @@ fn test_stop_race() {
 }
 
 #[test]
+fn test_worker_count() {
+    let max_workers = 10;
+    let mut count = 0;
+    let wp = WPool::new(max_workers);
+    for i in 0..max_workers {
+        wp.submit(|| {
+            thread::sleep(Duration::from_millis(10));
+        });
+        thread::sleep(Duration::from_millis(3));
+        count = wp.worker_count();
+        assert_eq!(i+1, count);
+    }
+    assert_eq!(count, max_workers);
+}
+
+#[test]
 fn test_long_running_job_continues_after_stop_wait() {
     let max_workers = 3;
     let long_running_task_sleep_for = Duration::from_secs(1);
