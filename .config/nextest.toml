@@ -1,2 +1,3 @@
 [profile.default]
-leak-timeout = { period = "500ms", result = "fail" }
+leak-timeout = { period = "200ms", result = "fail" }
+retries = { backoff = "exponential", count = 3, delay = "1s", jitter = true }

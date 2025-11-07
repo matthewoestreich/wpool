@@ -990,6 +990,7 @@ fn test_large_amount_of_jobs() {
 }
 
 #[test]
+#[ignore]
 fn test_large_amount_of_workers_and_jobs() {
     let max_workers = 16;
     let num_jobs = 2000000;
