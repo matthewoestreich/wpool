@@ -124,10 +124,11 @@ fn test_serial_test_sanity_2() {
 
 #[test]
 fn test_overflow_stress() {
-    run_test_n_times(500, 0, true, test_overflow);
+    run_test_n_times(1000, 0, false, test_overflow);
 }
 
 #[test]
+#[serial_test::serial]
 fn test_overflow() {
     let max_workers = 2;
     let num_jobs = 64;
