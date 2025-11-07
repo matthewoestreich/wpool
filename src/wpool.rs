@@ -312,6 +312,8 @@ impl WPool {
                 if let Some(signal) = waiting_queue.front()
                     && let Ok(_) = worker_sender.try_send(signal.clone())
                 {
+                    // Only pop off waitiing queue once we know the signal
+                    // was successfully passed into the worker channel.
                     waiting_queue.pop_front();
                 }
             }
