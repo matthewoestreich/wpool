@@ -93,7 +93,7 @@ where
 
 #[test]
 fn test_overflow_stress() {
-    run_test_n_times(100, 0, test_overflow);
+    run_test_n_times(300, 0, test_overflow);
 }
 
 #[test]
@@ -333,11 +333,13 @@ fn test_pause() {
 
     wp.submit(move || {
         thread::sleep(Duration::from_millis(1));
-        println!("i ran.");
+        println!(">>>> [from test_pause] >>>> i ran.");
         drop(ran_tx);
     });
 
+    println!(">>>> test_pause >> pausing");
     wp.pause();
+    println!(">>>> test_pause >> done pausing");
 
     // Check that Pause waits for all previously submitted tasks to run. If the job ran, there should be something for us to recv. Otherwise, error.
     match ran_rx.try_recv() {
@@ -350,7 +352,9 @@ fn test_pause() {
 
     (ran_tx, ran_rx) = mpsc::channel::<()>();
 
+    println!(">>> test_pause -> ab to submit");
     wp.submit(move || {
+        println!(">>>> [from test_pause] -> i ran 2");
         drop(ran_tx);
     });
 
