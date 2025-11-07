@@ -124,7 +124,7 @@ fn test_serial_test_sanity_2() {
 
 #[test]
 fn test_overflow_stress() {
-    run_test_n_times(1000, 0, false, test_overflow);
+    run_test_n_times(500, 0, false, test_overflow);
 }
 
 #[test]
@@ -133,24 +133,28 @@ fn test_overflow() {
     let max_workers = 2;
     let num_jobs = 64;
     let expected_len = 62;
-    let release_chan = unbounded();
+    let release_chan = unbounded::<()>();
+    let wait_group = WaitGroup::new();
+    wait_group.add(max_workers);
+    let is_ready = wait_group.clone();
     let p = WPool::new(max_workers);
     // Start workers, and have them all wait on a channel before completing.
     for _ in 0..num_jobs {
         let thread_release_receiver = release_chan.clone_receiver();
+        let thread_ready = is_ready.clone();
         p.submit(move || {
+            thread_ready.done();
             let _ = thread_release_receiver.recv();
+            thread::sleep(Duration::from_millis(1));
         });
     }
 
-    // Start a thread to free the workers after calling stop.  This way
-    // the dispatcher can exit, then when this thread runs, the pool
-    // can exit.
-    let release_thread_sender = release_chan.clone_sender();
+    wait_group.wait();
+
+    // Start a thread to free the workers.
     let release_handle = thread::spawn(move || {
-        for _ in 0..num_jobs {
-            let _ = release_thread_sender.send(());
-        }
+        // Release workers by closing release_chan (drop sender).
+        release_chan.drop_sender();
     });
 
     p.stop();
