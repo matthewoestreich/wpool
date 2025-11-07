@@ -310,10 +310,8 @@ impl WPool {
             }
             Err(TryRecvError::Empty) => {
                 let mut waiting_queue = safe_lock(&waiting_queue);
-                // Get a reference to the element at the front of waiting queue, if exists.
-                // This does not modify the waiting queue!
+                // Get a **refernce** to the element at the front of waiting queue, if exists.
                 if let Some(signal) = waiting_queue.front()
-                    // Clone the item at front, and try to send it to a worker.
                     && let Ok(_) = worker_sender.try_send(signal.clone())
                 {
                     // Only pop off (modify) waitiing queue once we know the
@@ -335,9 +333,13 @@ impl WPool {
         // Acquire lock for entirety of this process.
         let mut waiting_queue = safe_lock(&waiting_queue);
         while !waiting_queue.is_empty() {
-            if waiting_queue.front().is_some() {
-                let signal = waiting_queue.pop_front().expect("front");
-                let _ = worker_sender.send(signal);
+            // Get a **refernce** to the element at the front of waiting queue, if exists.
+            if let Some(signal) = waiting_queue.front()
+                && let Ok(_) = worker_sender.try_send(signal.clone())
+            {
+                // Only pop off (modify) waitiing queue once we know the
+                // signal was successfully passed into the worker channel.
+                waiting_queue.pop_front();
             }
         }
     }
@@ -353,6 +355,7 @@ impl WPool {
                     Signal::NewTask(task) => task.run(),
                     Signal::Terminate => break,
                 }
+
                 signal_maybe = match worker_receiver.recv() {
                     Ok(signal) => Some(signal),
                     Err(_) => break,
