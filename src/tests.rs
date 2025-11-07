@@ -936,7 +936,7 @@ fn test_worker_count() {
         });
         thread::sleep(Duration::from_millis(3));
         count = wp.worker_count();
-        assert_eq!(i+1, count);
+        assert_eq!(i + 1, count);
     }
     assert_eq!(count, max_workers);
 }
