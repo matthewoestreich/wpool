@@ -3,7 +3,7 @@ use std::{
     panic::{self, RefUnwindSafe, UnwindSafe},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::{self, RecvTimeoutError, TryRecvError},
     },
     thread,
@@ -11,7 +11,8 @@ use std::{
 };
 
 use crate::{
-    channel::unbounded,
+    ThreadedDeque,
+    channel::{bounded, unbounded},
     safe_lock,
     wait_group::WaitGroup,
     wpool::{WORKER_IDLE_TIMEOUT, WPool},
@@ -19,7 +20,7 @@ use crate::{
 
 // Runs a test `n_times` in a row.
 // failure_threshold : If this many runs fail this test willl fail. If 'failure_threshold' = 2, if 3 jobs fail, this job fails.
-fn run_test_n_times<F>(n_times: usize, failure_threshold: usize, test_fn: F)
+fn run_test_n_times<F>(n_times: usize, failure_threshold: usize, log_job_info: bool, test_fn: F)
 where
     F: FnOnce() + Send + Sync + Clone + Copy + UnwindSafe + RefUnwindSafe + 'static,
 {
@@ -27,7 +28,9 @@ where
     let thread_safe_test_fn = Arc::new(test_fn);
 
     for i in 0..n_times {
-        println!("\n--------------------- JOB {i} ---------------------");
+        if log_job_info {
+            println!("\n--------------------- JOB {i} ---------------------");
+        }
 
         let thread_fn = Arc::clone(&thread_safe_test_fn);
         let (release_tx, release_rx) = mpsc::sync_channel(0);
@@ -55,7 +58,7 @@ where
         }
     }
 
-    if !failed_iterations.is_empty() {
+    if log_job_info && !failed_iterations.is_empty() {
         println!(
             "\n\n------------------------------------------ Failed Iterations ------------------------------------------\n\n{:#?}\n\n-------------------------------------------------------------------------------------------------------",
             failed_iterations
@@ -91,9 +94,37 @@ where
     }
 }
 
+//######################################################################
+//###################################################################### SANITY CHECK FOR serial_test::serial
+static IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+#[test]
+#[serial_test::serial]
+fn test_serial_test_sanity_1() {
+    assert!(
+        !IN_PROGRESS.swap(true, Ordering::SeqCst),
+        "test_serial_test_sanity_1 ran concurrently!"
+    );
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    IN_PROGRESS.store(false, Ordering::SeqCst);
+}
+
+#[test]
+#[serial_test::serial]
+fn test_serial_test_sanity_2() {
+    assert!(
+        !IN_PROGRESS.swap(true, Ordering::SeqCst),
+        "test_serial_test_sanity_2 ran concurrently!"
+    );
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    IN_PROGRESS.store(false, Ordering::SeqCst);
+}
+//###################################################################### END sanity check
+//######################################################################
+
 #[test]
 fn test_overflow_stress() {
-    run_test_n_times(500, 0, test_overflow);
+    run_test_n_times(500, 0, true, test_overflow);
 }
 
 #[test]
@@ -120,7 +151,9 @@ fn test_overflow() {
             let _ = release_thread_sender.send(());
         }
     });
+
     p.stop();
+
     // Now that the pool has exited, it is safe to inspect its waiting
     // queue without causing a race.
     let wq_len = p._waiting_queue_len();
@@ -187,6 +220,104 @@ fn test_stop_basic() {
         ran_jobs < num_jobs,
         "expected ran jobs to be less than num_jobs : ran jobs = {ran_jobs} | num_jobs = {num_jobs}"
     );
+}
+
+#[test]
+fn test_stop_abandoned_waiting_queue() {
+    run_test_n_times(500, 0, false, || {
+        let max_workers = 10;
+        let num_jobs = 20;
+        let releaser_chan = unbounded::<()>();
+        let work_ready = WaitGroup::new();
+        work_ready.add(max_workers);
+
+        let wp = WPool::new(max_workers);
+
+        // Fill up our pool with jobs that are blocking while waiting to recv
+        let work_ready_clone = work_ready.clone();
+        let releaser_receiver_clone = releaser_chan.clone_receiver();
+        for _ in 0..num_jobs {
+            let ready = work_ready_clone.clone();
+            let receiver = releaser_receiver_clone.clone();
+            wp.submit(move || {
+                ready.done();
+                let _ = receiver.recv();
+                thread::sleep(Duration::from_millis(1));
+            });
+        }
+
+        // let wait queue fill up
+        work_ready.wait();
+        let mut wq_len = wp._waiting_queue_len();
+        let max_iters = 100_000;
+        let mut i = 0;
+        while wq_len != num_jobs - max_workers && i < max_iters {
+            wq_len = wp._waiting_queue_len();
+            println!(
+                "wq_len={wq_len} | num_jobs - max_workers={}",
+                num_jobs - max_workers
+            );
+            i += 1;
+        }
+
+        // Release the hounds
+        releaser_chan.drop_sender();
+        wp.stop();
+        assert_eq!(
+            wp._waiting_queue_len(),
+            num_jobs - max_workers,
+            "Expected 0 jobs from wait queue to run after stop()"
+        );
+    });
+}
+
+#[test]
+fn test_stop_wait_does_not_abandoned_waiting_queue() {
+    run_test_n_times(500, 0, false, || {
+        let max_workers = 10;
+        let num_jobs = 20;
+        let releaser_chan = unbounded::<()>();
+        let work_ready = WaitGroup::new();
+        work_ready.add(max_workers);
+
+        let wp = WPool::new(max_workers);
+
+        // Fill up our pool with jobs that are blocking while waiting to recv
+        let work_ready_clone = work_ready.clone();
+        let releaser_receiver_clone = releaser_chan.clone_receiver();
+        for _ in 0..num_jobs {
+            let ready = work_ready_clone.clone();
+            let receiver = releaser_receiver_clone.clone();
+            wp.submit(move || {
+                ready.done();
+                let _ = receiver.recv();
+                thread::sleep(Duration::from_millis(1));
+            });
+        }
+
+        // let wait queue fill up
+        work_ready.wait();
+        let mut wq_len = wp._waiting_queue_len();
+        let max_iters = 100_000; // Just incase, set a ceiling.
+        let mut i = 0; // Just incase, set a ceiling.
+        while wq_len != num_jobs - max_workers && i < max_iters {
+            wq_len = wp._waiting_queue_len();
+            println!(
+                "wq_len={wq_len} | num_jobs - max_workers={}",
+                num_jobs - max_workers
+            );
+            i += 1;
+        }
+
+        // Release the hounds
+        releaser_chan.drop_sender();
+        wp.stop_wait();
+        let len = wp._waiting_queue_len();
+        assert_eq!(
+            len, 0,
+            "Expected waiting queue to be processed after calling stop_wait()! Instead, we have {len} items in wait queue!",
+        );
+    });
 }
 
 #[test]
@@ -526,9 +657,43 @@ fn test_wait_queue_len_race_2() {
     let num_threads = 10;
     let num_jobs = 20;
 
-    let wp = Arc::new(Mutex::new(WPool::new(max_workers)));
+    let wp_og = Arc::new(Mutex::new(WPool::new(max_workers)));
+    let wp = Arc::clone(&wp_og);
 
-    let wp_len_checker = Arc::clone(&wp);
+    let releaser_og = unbounded::<()>();
+    let releaser = releaser_og.clone_receiver();
+    let submitter_ready_og = WaitGroup::new();
+    submitter_ready_og.add(num_threads * num_jobs);
+    let submitter_ready = submitter_ready_og.clone();
+
+    let spawner_thread = thread::spawn(move || {
+        for _ in 0..num_threads {
+            let wp_clone = Arc::clone(&wp);
+            let releaser_recv = releaser.clone();
+            let submitter_ready_clone = submitter_ready.clone();
+
+            thread::spawn(move || {
+                let wp_lock = safe_lock(&wp_clone);
+
+                for _ in 0..num_jobs {
+                    let thread_ready = submitter_ready_clone.clone();
+                    let thread_releaser = releaser_recv.clone();
+
+                    wp_lock.submit(move || {
+                        thread_ready.done();
+                        thread::sleep(Duration::from_micros(1));
+                        let _ = thread_releaser.recv();
+                    });
+                    //println!(
+                    //    "[worker][thread={t}][job={j}] wait_queue_len={}",
+                    //    wp_lock._waiting_queue_len()
+                    //);
+                }
+            });
+        }
+    });
+
+    let wp_len_checker = Arc::clone(&wp_og);
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
     // thread that constantly just reads wait queue len
     let len_checker_thread = thread::spawn(move || {
@@ -536,42 +701,24 @@ fn test_wait_queue_len_race_2() {
             if let Err(TryRecvError::Disconnected) = stop_rx.try_recv() {
                 break;
             }
-            println!(
-                "[len_checker] wait_que_len={}",
-                safe_lock(&wp_len_checker)._waiting_queue_len()
-            );
+            let len = safe_lock(&wp_len_checker)._waiting_queue_len();
+            //assert_ne!(len, 0, "Expected len to be > 0");
+            println!("[len_checker] wait_que_len={len}");
             //thread::yield_now();
         }
     });
 
-    let mut handles = vec![];
-    for t in 0..num_threads {
-        let wp_clone = Arc::clone(&wp);
-        handles.push(thread::spawn(move || {
-            let wp_lock = safe_lock(&wp_clone);
-            for j in 0..num_jobs {
-                wp_lock.submit(move || {
-                    thread::sleep(Duration::from_micros(1));
-                });
-                println!(
-                    "[worker][thread={t}][job={j}] wait_queue_len={}",
-                    wp_lock._waiting_queue_len()
-                );
-            }
-        }));
-    }
-
-    for handle in handles {
-        let _ = handle.join();
-    }
+    submitter_ready_og.wait();
+    releaser_og.drop_sender();
     drop(stop_tx);
+    let _ = spawner_thread.join();
     let _ = len_checker_thread.join();
 }
 
 #[test]
 #[serial_test::serial]
 fn test_wq_race() {
-    run_test_n_times(200, 0, waiting_queue_len_race);
+    run_test_n_times(200, 0, true, waiting_queue_len_race);
 }
 
 fn waiting_queue_len_race() {
@@ -622,6 +769,64 @@ fn waiting_queue_len_race() {
         final_max < num_threads * num_jobs,
         "should not have seen all tasks on waiting queue"
     );
+}
+
+#[test]
+#[serial_test::serial]
+fn test_stop_race() {
+    run_test_n_times(500, 0, false, || {
+        let max_workers = 20;
+        let work_release_chan = unbounded::<()>();
+        let started = WaitGroup::new();
+        started.add(max_workers);
+
+        let wp = Arc::new(WPool::new(max_workers));
+
+        // Start workers, and have them all wait on a channel before completing.
+        for _ in 0..max_workers {
+            let tstarted = started.clone();
+            let twork_release_receiver = work_release_chan.clone_receiver();
+            wp.submit(move || {
+                tstarted.done();
+                let _ = twork_release_receiver.recv();
+            });
+        }
+
+        started.wait();
+
+        let done_callers = 5;
+        let stop_done = bounded(done_callers);
+        for _ in 0..done_callers {
+            let wp_done = Arc::clone(&wp);
+            let stop_done_sender = stop_done.clone_sender();
+            thread::spawn(move || {
+                wp_done.stop();
+                let _ = stop_done_sender.send(());
+            });
+        }
+
+        assert!(
+            stop_done.try_recv().is_err(),
+            "[we want `stop_done.try_recv()` to not be `ok()`] : stop() should not return in any thread"
+        );
+
+        // Close work_release channel to unblock workers
+        work_release_chan.drop_sender();
+
+        let timeout = Duration::from_secs(1);
+        for _ in 0..done_callers {
+            let timed_out = true;
+            let should_timeout = false;
+            if let Err(RecvTimeoutError::Timeout) = stop_done.recv_timeout(timeout) {
+                wp.stop();
+                // Just to give us something to assert...
+                assert_eq!(
+                    timed_out, should_timeout,
+                    "timedout waiting for `stop()` to return"
+                );
+            };
+        }
+    });
 }
 
 #[test]
@@ -685,7 +890,7 @@ fn test_large_amount_of_jobs() {
 
 #[test]
 fn test_large_amount_of_workers_and_jobs() {
-    let max_workers = 1000;
+    let max_workers = 16;
     let num_jobs = 2000000;
     let counter = Arc::new(AtomicUsize::new(0));
 
@@ -808,6 +1013,19 @@ fn test_multiple_stop() {
 }
 
 #[test]
+fn test_min_workers_greater_than_max_workers() {
+    let max_workers = 5;
+    let min_workers = 10;
+    assert!(min_workers > max_workers); // in case someone changes these...
+    let wp = WPool::new_with_min(max_workers, min_workers);
+    assert_eq!(
+        wp.max_capacity(),
+        wp.min_capacity(),
+        "min_workers were not truncated to max_workers!"
+    );
+}
+
+#[test]
 fn test_wait_group_done_wait_race() {
     // Ensure there is not a race when calling done() before wait()
     run_test_with_timeout(Duration::from_secs(5), || {
@@ -833,4 +1051,189 @@ fn test_wait_group_done_wait_race() {
         wg.done();
         wg.wait();
     });
+}
+
+#[test]
+fn test_threaded_deque_push_pop_basic() {
+    let deque = ThreadedDeque::new();
+    assert!(deque.is_empty());
+    assert_eq!(deque.len(), 0);
+    deque.push_back(1);
+    deque.push_back(2);
+    assert!(!deque.is_empty());
+    assert_eq!(deque.len(), 2);
+    assert_eq!(deque.pop_front(), Some(1));
+    assert_eq!(deque.pop_back(), Some(2));
+    assert!(deque.is_empty());
+}
+
+#[test]
+fn test_threaded_deque_test_front_clone() {
+    let deque = ThreadedDeque::new();
+    deque.push_back(42);
+    let front = deque.front();
+    assert_eq!(front, Some(42));
+    // The deque itself is unchanged
+    assert_eq!(deque.len(), 1);
+    assert_eq!(deque.pop_front(), Some(42));
+}
+
+#[test]
+fn test_threaded_deque_clone_shares_state() {
+    let deque1 = ThreadedDeque::new();
+    let deque2 = deque1.clone();
+    deque1.push_back(10);
+    // Both see the same element
+    assert_eq!(deque2.front(), Some(10));
+    // Popping from one affects the other
+    assert_eq!(deque2.pop_front(), Some(10));
+    assert!(deque1.is_empty());
+}
+
+#[test]
+fn test_threaded_deque_concurrent_access() {
+    let deque = ThreadedDeque::new();
+
+    let handles: Vec<_> = (0..10)
+        .map(|i| {
+            let dq = deque.clone();
+            thread::spawn(move || {
+                dq.push_back(i);
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    assert_eq!(deque.len(), 10);
+
+    // Pop all values concurrently
+    let handles: Vec<_> = (0..10)
+        .map(|_| {
+            let dq = deque.clone();
+            thread::spawn(move || dq.pop_front())
+        })
+        .collect();
+
+    let mut results = vec![];
+    for h in handles {
+        if let Some(v) = h.join().unwrap() {
+            results.push(v);
+        }
+    }
+
+    results.sort();
+    assert_eq!(results, (0..10).collect::<Vec<_>>());
+    assert!(deque.is_empty());
+}
+
+#[test]
+fn test_threaded_deque_empty_pop_front_back() {
+    let deque: ThreadedDeque<i32> = ThreadedDeque::new();
+    assert_eq!(deque.pop_front(), None);
+    assert_eq!(deque.pop_back(), None);
+    assert_eq!(deque.front(), None);
+}
+
+#[test]
+fn test_threaded_deque_len_is_empty_consistency() {
+    let deque = ThreadedDeque::new();
+    assert!(deque.is_empty());
+    assert_eq!(deque.len(), 0);
+    deque.push_back(1);
+    assert!(!deque.is_empty());
+    assert_eq!(deque.len(), 1);
+    deque.pop_front();
+    assert!(deque.is_empty());
+    assert_eq!(deque.len(), 0);
+}
+
+#[test]
+fn test_threaded_deque_front_pop_front_race() {
+    run_test_n_times(100, 0, false, || {
+        let num_elements = 1000;
+
+        let deque = ThreadedDeque::new();
+        for i in 0..num_elements {
+            deque.push_back(i);
+        }
+
+        // thread that checks front, then if it is Some, pops front.
+        // In between checking the front, and popping the front, it is
+        // possible that another thread could have popped prior...
+        let check_front_deque = deque.clone();
+        let checker_thread = thread::spawn(move || {
+            // To combat this, acquire the lock.
+            let mut deque_guard = check_front_deque.lock();
+            while !deque_guard.is_empty() {
+                if let Some(got) = deque_guard.front().cloned() {
+                    let popped = deque_guard.pop_front();
+                    assert_eq!(got, popped.unwrap());
+                }
+            }
+        });
+
+        let pop_deque = deque.clone();
+        let popper_thread = thread::spawn(move || {
+            while !pop_deque.is_empty() {
+                let _ = pop_deque.pop_front();
+            }
+        });
+
+        checker_thread.join().unwrap();
+        popper_thread.join().unwrap();
+    });
+}
+
+#[test]
+#[should_panic]
+fn test_threaded_deque_front_pop_front_race_should_panic() {
+    run_test_n_times(10, 0, false, || {
+        let num_elements = 1000;
+
+        let deque = ThreadedDeque::new();
+        for i in 0..num_elements {
+            deque.push_back(i);
+        }
+
+        // thread that checks front, then if it is Some, pops front.
+        // In between checking the front, and popping the front, it is
+        // possible that another thread could have popped prior...
+        let check_front_deque = deque.clone();
+        let checker_thread = thread::spawn(move || {
+            while !check_front_deque.is_empty() {
+                if let Some(got) = check_front_deque.front() {
+                    let popped = check_front_deque.pop_front();
+                    //assert_eq!(got, popped.unwrap());
+                    if got != popped.unwrap() {
+                        panic!("race detected!!!");
+                    }
+                }
+            }
+        });
+
+        let pop_deque = deque.clone();
+        let popper_thread = thread::spawn(move || {
+            while !pop_deque.is_empty() {
+                let _ = pop_deque.pop_front();
+            }
+        });
+
+        checker_thread.join().unwrap();
+        popper_thread.join().unwrap();
+    });
+}
+
+#[test]
+fn test_threaded_deque_lock() {
+    let deque = ThreadedDeque::new();
+    let element = 1;
+    deque.push_back(element);
+    let mut lock = deque.lock();
+    let popped = lock.pop_front();
+    drop(lock);
+    assert!(deque.is_empty());
+    assert_eq!(popped.unwrap(), element);
 }

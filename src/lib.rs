@@ -64,7 +64,7 @@ pub use wpool::WPool;
 use std::{
     collections::VecDeque,
     fmt::{self, Display, Formatter},
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    sync::{Arc, Mutex, MutexGuard},
 };
 
 // One-liner that allows us to easily lock a Mutex while handling possible poison.
@@ -201,10 +201,8 @@ impl<T> ThreadedDeque<T> {
 
     /// If you want to get the MutexGuard for the inner VecDeque<T>
     /// This is not needed to use any methods!
-    pub(crate) fn lock(
-        &self,
-    ) -> Result<MutexGuard<'_, VecDeque<T>>, PoisonError<MutexGuard<'_, VecDeque<T>>>> {
-        self.inner.lock()
+    pub(crate) fn lock(&self) -> MutexGuard<'_, VecDeque<T>> {
+        safe_lock(&self.inner)
     }
 
     #[inline]
@@ -218,8 +216,8 @@ impl<T> ThreadedDeque<T> {
     }
 
     #[inline]
-    pub(crate) fn push_back(&self, element: T) {
-        safe_lock(&self.inner).push_back(element);
+    pub(crate) fn push_back(&self, value: T) {
+        safe_lock(&self.inner).push_back(value);
     }
 
     #[inline]

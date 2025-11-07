@@ -43,6 +43,12 @@ impl WPool {
         let worker_channel = bounded(0);
         let task_channel = unbounded();
 
+        let min_workers = if min_workers > max_workers {
+            max_workers
+        } else {
+            min_workers
+        };
+
         let dispatch_handle = Self::dispatch(
             max_workers,
             min_workers,
@@ -308,14 +314,19 @@ impl WPool {
                 waiting_queue.push_back(signal);
             }
             Err(TryRecvError::Empty) => {
-                // Get a **reference** to the element at the front of waiting queue, if exists.
-                if let Some(signal) = waiting_queue.front()
+                // Get a **reference** to the element at the front of
+                // waiting queue, if exists. Lock the entire shared
+                // deque while checking, and then popping from it.
+                // Otherwise we have a race.
+                let mut wq = waiting_queue.lock();
+                if let Some(signal) = wq.front()
                     && let Ok(_) = worker_sender.try_send(signal.clone())
                 {
                     // Only pop off (modify) waitiing queue once we know the
                     // signal was successfully passed into the worker channel.
-                    waiting_queue.pop_front();
+                    wq.pop_front();
                 }
+                drop(wq); // Drop the lock ASAP
             }
             // Task channel closed.
             Err(_) => return false,
@@ -325,14 +336,16 @@ impl WPool {
 
     /// Essentially drains the wait_queue.
     fn run_queued_tasks(waiting_queue: &ThreadedDeque<Signal>, worker_sender: &Sender<Signal>) {
-        while !waiting_queue.is_empty() {
+        // Lock the entire wait queue for the entire duration of this process.
+        let mut wq = waiting_queue.lock();
+        while !wq.is_empty() {
             // Get a **reference** to the element at the front of waiting queue, if exists.
-            if let Some(signal) = waiting_queue.front()
+            if let Some(signal) = wq.front()
                 && let Ok(_) = worker_sender.try_send(signal.clone())
             {
                 // Only pop off (modify) waitiing queue once we know the
                 // signal was successfully passed into the worker channel.
-                waiting_queue.pop_front();
+                wq.pop_front();
             }
         }
     }
@@ -348,7 +361,6 @@ impl WPool {
                     Signal::NewTask(task) => task.run(),
                     Signal::Terminate => break,
                 }
-
                 signal_maybe = match worker_receiver.recv() {
                     Ok(signal) => Some(signal),
                     Err(_) => break,
