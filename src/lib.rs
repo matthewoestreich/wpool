@@ -61,8 +61,14 @@ mod wpool;
 
 pub use wpool::WPool;
 
+use std::{
+    collections::VecDeque,
+    fmt::{self, Display, Formatter},
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
+};
+
 // One-liner that allows us to easily lock a Mutex while handling possible poison.
-pub(crate) fn safe_lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+pub(crate) fn safe_lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     match m.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
@@ -99,8 +105,8 @@ impl WPoolStatus {
     }
 }
 
-impl std::fmt::Display for WPoolStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl Display for WPoolStatus {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             WPoolStatus::Running => write!(f, "WPoolStatus::Running"),
             WPoolStatus::Paused => write!(f, "WPoolStatus::Paused"),
@@ -110,8 +116,8 @@ impl std::fmt::Display for WPoolStatus {
 }
 
 impl std::fmt::Debug for WPoolStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        Display::fmt(self, f)
     }
 }
 
@@ -123,8 +129,8 @@ pub(crate) enum Signal {
     Terminate,
 }
 
-impl std::fmt::Display for Signal {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl Display for Signal {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Signal::NewTask(_) => write!(f, "Signal::NewTask(Task)"),
             Signal::Terminate => write!(f, "Signal::Terminate"),
@@ -133,8 +139,8 @@ impl std::fmt::Display for Signal {
 }
 
 impl std::fmt::Debug for Signal {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        Display::fmt(self, f)
     }
 }
 
@@ -143,13 +149,13 @@ impl std::fmt::Debug for Signal {
 pub(crate) type TaskFn = Box<dyn FnOnce() + Send + 'static>;
 
 pub(crate) struct Task {
-    inner: std::sync::Arc<dyn Fn() + Send + Sync + 'static>,
+    inner: Arc<dyn Fn() + Send + Sync + 'static>,
 }
 
 impl Task {
     pub fn new(f: TaskFn) -> Self {
-        let f = std::sync::Mutex::new(Some(f));
-        let inner = std::sync::Arc::new(move || {
+        let f = Mutex::new(Some(f));
+        let inner = Arc::new(move || {
             if let Some(f) = safe_lock(&f).take() {
                 f();
             }
@@ -165,7 +171,73 @@ impl Task {
 impl Clone for Task {
     fn clone(&self) -> Self {
         Task {
-            inner: std::sync::Arc::clone(&self.inner),
+            inner: Arc::clone(&self.inner),
         }
+    }
+}
+
+/*********************************** ThreadedDeque **************************************/
+
+// ThreadedDeque is a threadsafe VecDeque.
+pub(crate) struct ThreadedDeque<T> {
+    inner: Arc<Mutex<VecDeque<T>>>,
+}
+
+impl<T> Clone for ThreadedDeque<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl<T> ThreadedDeque<T> {
+    pub(crate) fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(VecDeque::new())),
+        }
+    }
+
+    /// If you want to get the MutexGuard for the inner VecDeque<T>
+    /// This is not needed to use any methods!
+    pub(crate) fn lock(
+        &self,
+    ) -> Result<MutexGuard<'_, VecDeque<T>>, PoisonError<MutexGuard<'_, VecDeque<T>>>> {
+        self.inner.lock()
+    }
+
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        safe_lock(&self.inner).len()
+    }
+
+    #[inline]
+    pub(crate) fn is_empty(&self) -> bool {
+        safe_lock(&self.inner).is_empty()
+    }
+
+    #[inline]
+    pub(crate) fn push_back(&self, element: T) {
+        safe_lock(&self.inner).push_back(element);
+    }
+
+    #[inline]
+    pub(crate) fn pop_back(&self) -> Option<T> {
+        safe_lock(&self.inner).pop_back()
+    }
+
+    #[inline]
+    pub(crate) fn pop_front(&self) -> Option<T> {
+        safe_lock(&self.inner).pop_front()
+    }
+
+    /// Returns a clone of the front. **DOES NOT MODIFY THE UNDERLYING VecDeque**
+    #[inline]
+    pub(crate) fn front(&self) -> Option<T>
+    where
+        T: Clone,
+    {
+        safe_lock(&self.inner).front().cloned()
     }
 }

@@ -1,5 +1,4 @@
 use std::{
-    collections::VecDeque,
     sync::{
         Arc, Mutex, Once,
         atomic::{AtomicU8, AtomicUsize, Ordering},
@@ -10,7 +9,7 @@ use std::{
 };
 
 use crate::{
-    Signal, Task, WPoolStatus,
+    Signal, Task, ThreadedDeque, WPoolStatus,
     channel::{Channel, Receiver, Sender, bounded, unbounded},
     safe_lock,
     wait_group::WaitGroup,
@@ -32,7 +31,7 @@ pub struct WPool {
     task_sender: Sender<Signal>,
     worker_count: Arc<AtomicUsize>,
     #[allow(dead_code)]
-    waiting_queue: Arc<Mutex<VecDeque<Signal>>>,
+    waiting_queue: ThreadedDeque<Signal>,
 }
 
 impl WPool {
@@ -40,7 +39,7 @@ impl WPool {
     fn new_base(max_workers: usize, min_workers: usize) -> Self {
         let status = Arc::new(AtomicU8::new(WPoolStatus::Running.as_u8()));
         let worker_count = Arc::new(AtomicUsize::new(0));
-        let waiting_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let waiting_queue = ThreadedDeque::new();
         let worker_channel = bounded(0);
         let task_channel = unbounded();
 
@@ -49,7 +48,7 @@ impl WPool {
             min_workers,
             Arc::clone(&status),
             Arc::clone(&worker_count),
-            Arc::clone(&waiting_queue),
+            waiting_queue.clone(),
             task_channel.clone_receiver(),
             worker_channel.clone_sender(),
             worker_channel.clone_receiver(),
@@ -189,6 +188,7 @@ impl WPool {
         for _ in 0..self.max_workers {
             let thread_ready = is_ready.clone();
             let thread_resume_signal = self.resume_signal.clone_receiver();
+            // Inject our pause semantics into a 'regular task' and submit to pool.
             self.submit(move || {
                 thread_ready.done();
                 let _ = thread_resume_signal.recv();
@@ -217,7 +217,7 @@ impl WPool {
     /************************* Crate methods *****************************************/
 
     pub(crate) fn _waiting_queue_len(&self) -> usize {
-        safe_lock(&self.waiting_queue).len()
+        self.waiting_queue.len()
     }
 
     /************************* Private methods ***************************************/
@@ -230,7 +230,7 @@ impl WPool {
         min_workers: usize,
         status: Arc<AtomicU8>,
         worker_count: Arc<AtomicUsize>,
-        waiting_queue: Arc<Mutex<VecDeque<Signal>>>,
+        waiting_queue: ThreadedDeque<Signal>,
         task_receiver: Receiver<Signal>,
         worker_sender: Sender<Signal>,
         worker_receiver: Receiver<Signal>,
@@ -241,12 +241,9 @@ impl WPool {
 
             loop {
                 // See `process_waiting_queue` comments for more info.
-                if !safe_lock(&waiting_queue).is_empty() {
-                    if !Self::process_waiting_queue(
-                        Arc::clone(&waiting_queue),
-                        task_receiver.clone(),
-                        worker_sender.clone(),
-                    ) {
+                if !waiting_queue.is_empty() {
+                    if !Self::process_waiting_queue(&waiting_queue, &task_receiver, &worker_sender)
+                    {
                         break;
                     }
                     continue;
@@ -257,8 +254,10 @@ impl WPool {
                     Ok(signal) => signal,
                     Err(RecvTimeoutError::Timeout) => {
                         // Keep `min_workers` alive.
-                        if is_idle && worker_count.load(Ordering::SeqCst) > min_workers {
-                            let _ = worker_sender.send(Signal::Terminate);
+                        if is_idle
+                            && worker_count.load(Ordering::SeqCst) > min_workers
+                            && worker_sender.try_send(Signal::Terminate).is_ok()
+                        {
                             worker_count.fetch_sub(1, Ordering::SeqCst);
                         }
                         is_idle = true;
@@ -269,7 +268,7 @@ impl WPool {
 
                 // Got a task.
                 if worker_count.load(Ordering::SeqCst) >= max_workers {
-                    safe_lock(&waiting_queue).push_back(signal);
+                    waiting_queue.push_back(signal);
                 } else {
                     wait_group.add(1);
                     Self::spawn_worker(signal, wait_group.clone(), worker_receiver.clone());
@@ -281,7 +280,7 @@ impl WPool {
 
             // If `stop_wait()` was called run tasks and waiting queue.
             if WPoolStatus::from_u8(status.load(Ordering::SeqCst)) == WPoolStatus::Stopped(true) {
-                Self::run_queued_tasks(Arc::clone(&waiting_queue), worker_sender.clone());
+                Self::run_queued_tasks(&waiting_queue, &worker_sender);
             }
 
             // Terminate workers as they become available.
@@ -300,17 +299,16 @@ impl WPool {
     /// queue. Once the waiting queue is empty, then go back to submitting incoming
     /// signals directly to available workers.
     fn process_waiting_queue(
-        waiting_queue: Arc<Mutex<VecDeque<Signal>>>,
-        task_receiver: Receiver<Signal>,
-        worker_sender: Sender<Signal>,
+        waiting_queue: &ThreadedDeque<Signal>,
+        task_receiver: &Receiver<Signal>,
+        worker_sender: &Sender<Signal>,
     ) -> bool {
         match task_receiver.try_recv() {
             Ok(signal) => {
-                safe_lock(&waiting_queue).push_back(signal);
+                waiting_queue.push_back(signal);
             }
             Err(TryRecvError::Empty) => {
-                let mut waiting_queue = safe_lock(&waiting_queue);
-                // Get a **refernce** to the element at the front of waiting queue, if exists.
+                // Get a **reference** to the element at the front of waiting queue, if exists.
                 if let Some(signal) = waiting_queue.front()
                     && let Ok(_) = worker_sender.try_send(signal.clone())
                 {
@@ -326,14 +324,9 @@ impl WPool {
     }
 
     /// Essentially drains the wait_queue.
-    fn run_queued_tasks(
-        waiting_queue: Arc<Mutex<VecDeque<Signal>>>,
-        worker_sender: Sender<Signal>,
-    ) {
-        // Acquire lock for entirety of this process.
-        let mut waiting_queue = safe_lock(&waiting_queue);
+    fn run_queued_tasks(waiting_queue: &ThreadedDeque<Signal>, worker_sender: &Sender<Signal>) {
         while !waiting_queue.is_empty() {
-            // Get a **refernce** to the element at the front of waiting queue, if exists.
+            // Get a **reference** to the element at the front of waiting queue, if exists.
             if let Some(signal) = waiting_queue.front()
                 && let Ok(_) = worker_sender.try_send(signal.clone())
             {
