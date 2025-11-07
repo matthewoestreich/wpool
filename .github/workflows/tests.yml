@@ -1,42 +1,30 @@
-name: Run Tests
+name: Rust CI
 
-on:
-  push:
-  pull_request:
+on: [push, pull_request]
 
 jobs:
   test:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
-      - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
+          override: true
 
-      - name: Install cargo-nextest
-        run: cargo install cargo-nextest
-
-      - name: Cache cargo registry
-        uses: actions/cache@v3
+      - uses: actions/cache@v3
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+            ~/.cargo/bin
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-registry-
+            ${{ runner.os }}-cargo-
 
-      - name: Cache cargo build
-        uses: actions/cache@v3
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-build-
+      - name: Install cargo-nextest
+        run: cargo install cargo-nextest --locked
 
       - name: Run tests
-        run: cargo nextest run --lib --verbose 
+        run: cargo nextest run --lib --verbose
