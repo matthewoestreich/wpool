@@ -354,7 +354,6 @@ impl WPool {
     fn spawn_worker(signal: Signal, wait_group: WaitGroup, worker_receiver: Receiver<Signal>) {
         thread::spawn(move || {
             let mut signal_maybe = Some(signal);
-
             while signal_maybe.is_some() {
                 match signal_maybe.take().expect("is_some()") {
                     Signal::NewTask(task) => task.run(),
@@ -365,7 +364,6 @@ impl WPool {
                     Err(_) => break,
                 }
             }
-
             wait_group.done();
         });
     }
@@ -380,7 +378,6 @@ impl WPool {
             // Close tasks channel.
             self.task_sender.drop();
         });
-
         if let Some(handle) = safe_lock(&self.dispatch_handle).take() {
             let _ = handle.join();
         }
