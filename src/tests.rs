@@ -376,6 +376,103 @@ fn test_job_actually_ran() {
 }
 
 #[test]
+fn test_multiple_pause_resume_resets_resume_channel() {
+    // If the 'shutdown lock (which acts as a pause/unpause signal)' is not
+    // reset after resume is called, then the next time pause is called,
+    // try to recv on that channel will error and workers will not block
+    // before everything is paused.
+    // This test tests for that 'reset' during resume.
+    let max_workers = 4;
+    let num_jobs = 10;
+    let wp = WPool::new(max_workers);
+
+    for cycle in 0..3 {
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        for _ in 0..num_jobs {
+            let c = Arc::clone(&counter);
+            wp.submit(move || {
+                thread::sleep(Duration::from_millis(50));
+                c.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+
+        let start = std::time::Instant::now();
+        wp.pause();
+        let elapsed = start.elapsed();
+
+        // This is the critical assertion. If 'shutdown lock' was not reset after prev cycle
+        // then workers will not block until everyone is paused, they will fall thru immediately.
+        assert!(
+            elapsed >= Duration::from_millis(45),
+            "pause() returned too quickly on cycle {cycle} — likely resume channel was not reset!"
+        );
+
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            num_jobs,
+            "not all jobs completed in cycle {cycle}"
+        );
+        wp.resume();
+    }
+}
+
+#[test]
+fn test_pause_resume_resets_resume_channel() {
+    // If the 'shutdown lock (which acts as a pause/unpause signal)' is not
+    // reset after resume is called, then the next time pause is called,
+    // try to recv on that channel will error and workers will not block
+    // before everything is paused.
+    // This test tests for that 'reset' during resume.
+    let max_workers = 4;
+    let num_jobs = 4;
+    let counter = Arc::new(AtomicUsize::new(0));
+    let wp = WPool::new(max_workers);
+
+    // Submit a batch of long-running jobs that wait on resume_signal
+    for _ in 0..num_jobs {
+        let c = Arc::clone(&counter);
+        wp.submit(move || {
+            // Work before pause check
+            thread::sleep(Duration::from_millis(50));
+            c.fetch_add(1, Ordering::SeqCst);
+        });
+    }
+
+    let start = std::time::Instant::now();
+    wp.pause();
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(45),
+        "first pause did not block properly"
+    );
+
+    wp.resume();
+
+    counter.store(0, Ordering::SeqCst);
+    for _ in 0..num_jobs {
+        let c = Arc::clone(&counter);
+        wp.submit(move || {
+            thread::sleep(Duration::from_millis(50));
+            c.fetch_add(1, Ordering::SeqCst);
+        });
+    }
+
+    let start = std::time::Instant::now();
+    wp.pause();
+    let elapsed = start.elapsed();
+
+    // This is the critical assertion:
+    // - If 'shutdown_lock' was NOT reset, pause will return immediately (~0ms)
+    // - If 'shutdown_lock' WAS reset, pause will block ~50ms
+    if elapsed < Duration::from_millis(20) {
+        panic!("pause returned immediately — resume channel was not reset!");
+    }
+
+    assert_eq!(counter.load(Ordering::SeqCst), num_jobs);
+}
+
+#[test]
 fn test_idle_worker() {
     let max_workers = 3;
     let num_jobs = max_workers + 1;
@@ -1028,6 +1125,7 @@ fn test_min_workers_greater_than_max_workers() {
         wp.min_capacity(),
         "min_workers were not truncated to max_workers!"
     );
+    wp.stop_wait();
 }
 
 #[test]
@@ -1156,7 +1254,15 @@ fn test_threaded_deque_len_is_empty_consistency() {
 }
 
 #[test]
-fn test_threaded_deque_front_pop_front_race() {
+fn test_threaded_deque_front_pop_and_front_race() {
+    // Imagine you have one thread that loops and just calls pop_front.
+    // You have anything thread that needs to check something is at front,
+    // getting a reference to it, then uses that ref in some operation.
+    // Suppose that operation could fail, which is why they only call
+    // pop_front after 'that operation' was successful with the cloned front.
+    // When they call pop_front they won't be popping what they think they are.
+    // Due to the other thread constantly popping front, there's a race.
+    // This test tests for that race.
     run_test_n_times(100, 0, false, || {
         let num_elements = 1000;
 
@@ -1195,6 +1301,14 @@ fn test_threaded_deque_front_pop_front_race() {
 #[test]
 #[should_panic]
 fn test_threaded_deque_front_pop_front_race_should_panic() {
+    // Imagine you have one thread that loops and just calls pop_front.
+    // You have anything thread that needs to check something is at front,
+    // getting a reference to it, then uses that ref in some operation.
+    // Suppose that operation could fail, which is why they only call
+    // pop_front after 'that operation' was successful with the cloned front.
+    // When they call pop_front they won't be popping what they think they are.
+    // Due to the other thread constantly popping front, there's a race.
+    // This test tests for that race.
     run_test_n_times(10, 0, false, || {
         let num_elements = 1000;
 

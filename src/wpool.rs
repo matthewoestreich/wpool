@@ -24,8 +24,7 @@ pub struct WPool {
     dispatch_handle: Mutex<Option<thread::JoinHandle<()>>>,
     max_workers: usize,
     min_workers: usize,
-    resume_signal: Channel<()>,
-    shutdown_lock: Mutex<()>,
+    shutdown_lock: Mutex<Channel<()>>,
     status: Arc<AtomicU8>,
     stop_once: Once,
     task_sender: Sender<Signal>,
@@ -64,8 +63,7 @@ impl WPool {
             dispatch_handle: Mutex::new(Some(dispatch_handle)),
             max_workers,
             min_workers,
-            resume_signal: unbounded(),
-            shutdown_lock: Mutex::new(()),
+            shutdown_lock: Mutex::new(unbounded()),
             status,
             stop_once: Once::new(),
             task_sender: task_channel.clone_sender(),
@@ -180,8 +178,8 @@ impl WPool {
     /// be spawned, up to the pool maximum, and immediately paused. This ensures that
     /// every worker that could possibly exist in the pool is paused.
     pub fn pause(&self) {
-        // Acquire shutdown lock so we aren't interrupted by a shutdown.
-        let _shutdown_lock = safe_lock(&self.shutdown_lock);
+        // Acquire lock for duration of this process, so we aren't interrupted by a shutdown.
+        let resume_signal = safe_lock(&self.shutdown_lock);
 
         let status = self.status();
         if matches!(status, WPoolStatus::Stopped(_)) || status == WPoolStatus::Paused {
@@ -193,7 +191,7 @@ impl WPool {
 
         for _ in 0..self.max_workers {
             let thread_ready = is_ready.clone();
-            let thread_resume_signal = self.resume_signal.clone_receiver();
+            let thread_resume_signal = resume_signal.clone_receiver();
             // Inject our pause semantics into a 'regular task' and submit to pool.
             self.submit(move || {
                 thread_ready.done();
@@ -207,8 +205,8 @@ impl WPool {
 
     /// Resumes/unpauses all paused workers.
     pub fn resume(&self) {
-        // Acquire shutdown lock so we aren't interrupted by a shutdown.
-        let _shutdown_lock = safe_lock(&self.shutdown_lock);
+        // Acquire lock for duration of this process, so we aren't interrupted by a shutdown.
+        let mut resume_signal = safe_lock(&self.shutdown_lock);
 
         let status = self.status();
         if status != WPoolStatus::Paused || matches!(status, WPoolStatus::Stopped(_)) {
@@ -216,7 +214,9 @@ impl WPool {
         }
 
         // Close 'unpause signal' channel to unblock all workers.
-        self.resume_signal.drop_sender();
+        resume_signal.drop_sender();
+        // Need to reset resume signal, so if pause is called again, it works.
+        *resume_signal = unbounded::<()>();
         self.set_status(WPoolStatus::Running);
     }
 
@@ -374,7 +374,7 @@ impl WPool {
     fn shutdown(&self, wait: bool) {
         self.stop_once.call_once(|| {
             self.resume();
-            // Acquire shutdown lock so we can wait for any in-progress pauses.
+            // Acquire lock so we can wait for any in-progress pauses.
             let shutdown_lock = safe_lock(&self.shutdown_lock);
             self.set_status(WPoolStatus::Stopped(wait));
             drop(shutdown_lock);
