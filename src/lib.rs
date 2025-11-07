@@ -61,8 +61,6 @@ mod wpool;
 
 pub use wpool::WPool;
 
-use crate::{channel::Receiver, wait_group::WaitGroup};
-
 // Allows us to easily lock a Mutex while handling possible poison.
 pub(crate) fn safe_lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     match m.lock() {
@@ -122,7 +120,6 @@ impl std::fmt::Debug for WPoolStatus {
 #[derive(Clone)]
 pub(crate) enum Signal {
     NewTask(Task),
-    Pause(WaitGroup, Receiver<()>),
     Terminate,
 }
 
@@ -130,7 +127,6 @@ impl std::fmt::Display for Signal {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Signal::NewTask(_) => write!(f, "Signal::NewTask(Task)"),
-            Signal::Pause(_, _) => write!(f, "Signal::Pause"),
             Signal::Terminate => write!(f, "Signal::Terminate"),
         }
     }

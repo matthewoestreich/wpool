@@ -93,7 +93,7 @@ where
 
 #[test]
 fn test_overflow_stress() {
-    run_test_n_times(300, 0, test_overflow);
+    run_test_n_times(500, 0, test_overflow);
 }
 
 #[test]
@@ -569,14 +569,15 @@ fn test_wait_queue_len_race_2() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_wq_race() {
-    run_test_n_times(100, 0, waiting_queue_len_race);
+    run_test_n_times(200, 0, waiting_queue_len_race);
 }
 
 fn waiting_queue_len_race() {
-    let num_threads = 10;
+    let num_threads = 100;
     let num_jobs = 20;
-    let max_workers = 5;
+    let max_workers = 1;
     let mut handles = Vec::<std::thread::JoinHandle<()>>::new();
 
     let wp = Arc::new(WPool::new(max_workers));
@@ -621,7 +622,6 @@ fn waiting_queue_len_race() {
         final_max < num_threads * num_jobs,
         "should not have seen all tasks on waiting queue"
     );
-    wp.stop_wait();
 }
 
 #[test]

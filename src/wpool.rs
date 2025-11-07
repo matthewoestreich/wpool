@@ -248,15 +248,30 @@ impl WPool {
             let wait_group = WaitGroup::new();
 
             loop {
-                // See `process_waiting_queue` method for more notes on this.
+                // Processes tasks within the waiting queue.
+                // As long as the waiting queue isn't empty, incoming signals (on task channel)
+                // are put into the waiting queue and signals to run are taken from the waiting
+                // queue. Once the waiting queue is empty, then go back to submitting incoming
+                // signals directly to available workers.
                 if !safe_lock(&waiting_queue).is_empty() {
-                    if !Self::process_waiting_queue(
-                        Arc::clone(&waiting_queue),
-                        task_receiver.clone(),
-                        worker_sender.clone(),
-                    ) {
-                        break;
-                    }
+                    match task_receiver.try_recv() {
+                        Ok(signal) => {
+                            safe_lock(&waiting_queue).push_back(signal);
+                        }
+                        Err(TryRecvError::Empty) => {
+                            let mut wq = safe_lock(&waiting_queue);
+                            if let Some(signal) = wq.front()
+                                && let Ok(_) = worker_sender.try_send(signal.clone())
+                            {
+                                wq.pop_front();
+                                println!("    process_wait_queue -> sent task to worker");
+                            }
+                        }
+                        Err(_) => {
+                            println!("process_wait_queue -> task channel closed, returning false");
+                            break;
+                        } // Task channel closed.
+                    };
                     continue;
                 }
 
@@ -264,14 +279,9 @@ impl WPool {
                 let signal = match task_receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
                     Ok(signal) => signal,
                     Err(RecvTimeoutError::Timeout) => {
-                        println!(
-                            "dispatch -> passed idle timeout waiting for something on tasks chan, wait_queue={:#?}",
-                            safe_lock(&waiting_queue)
-                        );
-                        if worker_count.load(Ordering::SeqCst) > min_workers {
+                        if is_idle && worker_count.load(Ordering::SeqCst) > min_workers {
                             let _ = worker_sender.send(Signal::Terminate);
                             worker_count.fetch_sub(1, Ordering::SeqCst);
-                            //Signal::Terminate
                         }
                         is_idle = true;
                         continue;
@@ -317,14 +327,7 @@ impl WPool {
             while signal_opt.is_some() {
                 match signal_opt.take().expect("is_some()") {
                     Signal::NewTask(task) => task.run(),
-                    //Signal::Pause(sender, receiver) => {
-                    //    println!("worker -> got pause signal, ab to send ack and pause.");
-                    //    let _ = sender.send(()); // Send 'paused ack'.
-                    //    let _ = receiver.recv(); // Blocking.
-                    //    println!("    worker -> unpaused!");
-                    //}
                     Signal::Terminate => break,
-                    _ => {}
                 }
                 signal_opt = match worker_receiver.recv() {
                     Ok(signal) => Some(signal),
@@ -332,45 +335,7 @@ impl WPool {
                 }
             }
             wait_group.done();
-            println!("worker -> exiting");
         });
-    }
-
-    /// Processes tasks within the waiting queue.
-    /// As long as the waiting queue isn't empty, incoming signals (on task channel)
-    /// are put into the waiting queue and signals to run are taken from the waiting
-    /// queue. Once the waiting queue is empty, then go back to submitting incoming
-    /// signals directly to available workers.
-    fn process_waiting_queue(
-        waiting_queue: Arc<Mutex<VecDeque<Signal>>>,
-        task_receiver: Receiver<Signal>,
-        worker_sender: Sender<Signal>,
-    ) -> bool {
-        match task_receiver.try_recv() {
-            Ok(signal) => {
-                safe_lock(&waiting_queue).push_back(signal);
-                println!("process_wait_queue -> got something on tasks chan, putting in queue");
-            }
-            Err(TryRecvError::Empty) => {
-                let mut wq = safe_lock(&waiting_queue);
-                println!(
-                    "process_wait_queue -> task chan empty, checking wait queue | wq = {:#?}",
-                    wq
-                );
-                if let Some(signal) = wq.front()
-                    && let Ok(_) = worker_sender.try_send(signal.clone())
-                {
-                    wq.pop_front();
-                    println!("process_wait_queue -> sent task to worker");
-                }
-            }
-            Err(_) => {
-                println!("process_wait_queue -> task channel closed, returning false");
-                return false;
-            } // Task channel closed.
-        };
-        println!("process_wait_queue -> done -> returning true");
-        true
     }
 
     /// Essentially drains the wait_queue.
