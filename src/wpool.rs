@@ -25,14 +25,14 @@ pub struct WPool {
     dispatch_handle: Mutex<Option<thread::JoinHandle<()>>>,
     max_workers: usize,
     min_workers: usize,
-    stop_lock: Mutex<()>,
+    resume_signal: Channel<()>,
+    shutdown_lock: Mutex<()>,
     status: Arc<AtomicU8>,
     stop_once: Once,
     task_sender: Sender<Signal>,
-    unpause_signal: Channel<()>,
+    worker_count: Arc<AtomicUsize>,
     #[allow(dead_code)]
     waiting_queue: Arc<Mutex<VecDeque<Signal>>>,
-    worker_count: Arc<AtomicUsize>,
 }
 
 impl WPool {
@@ -59,13 +59,13 @@ impl WPool {
             dispatch_handle: Mutex::new(Some(dispatch_handle)),
             max_workers,
             min_workers,
-            stop_lock: Mutex::new(()),
+            resume_signal: unbounded(),
+            shutdown_lock: Mutex::new(()),
             status,
             stop_once: Once::new(),
             task_sender: task_channel.clone_sender(),
-            unpause_signal: unbounded(),
-            waiting_queue,
             worker_count,
+            waiting_queue,
         }
     }
 
@@ -132,12 +132,12 @@ impl WPool {
     where
         F: FnOnce() + Send + 'static,
     {
-        let (sender, receiver) = mpsc::sync_channel(0);
+        let (tx, rx) = mpsc::sync_channel(0);
         self.submit(move || {
             task();
-            let _ = sender.send(());
+            let _ = tx.send(());
         });
-        let _ = receiver.recv(); // blocks until complete
+        let _ = rx.recv(); // blocks until complete
     }
 
     /// Stops the pool and waits for currently running tasks, as well as any tasks
@@ -175,35 +175,42 @@ impl WPool {
     /// be spawned, up to the pool maximum, and immediately paused. This ensures that
     /// every worker that could possibly exist in the pool is paused.
     pub fn pause(&self) {
-        let _stop_lock = safe_lock(&self.stop_lock);
-        if self.is_stopped() || self.is_paused() {
+        // Acquire shutdown lock so we aren't interrupted by a shutdown.
+        let _shutdown_lock = safe_lock(&self.shutdown_lock);
+
+        let status = self.status();
+        if matches!(status, WPoolStatus::Stopped(_)) || status == WPoolStatus::Paused {
             return;
         }
 
-        let wg = WaitGroup::new();
-        wg.add(self.max_workers);
+        let is_ready = WaitGroup::new();
+        is_ready.add(self.max_workers);
 
-        for i in 0..self.max_workers {
-            let wg_clone = wg.clone();
-            let unpause_signal = self.unpause_signal.clone_receiver();
-
+        for _ in 0..self.max_workers {
+            let thread_ready = is_ready.clone();
+            let thread_resume_signal = self.resume_signal.clone_receiver();
             self.submit(move || {
-                wg_clone.done();
-                let _ = unpause_signal.recv();
+                thread_ready.done();
+                let _ = thread_resume_signal.recv();
             });
         }
 
-        wg.wait();
+        is_ready.wait();
         self.set_status(WPoolStatus::Paused);
     }
 
     /// Resumes/unpauses all paused workers.
     pub fn resume(&self) {
-        let _pause_lock = safe_lock(&self.stop_lock);
-        if self.is_stopped() || !self.is_paused() {
+        // Acquire shutdown lock so we aren't interrupted by a shutdown.
+        let _shutdown_lock = safe_lock(&self.shutdown_lock);
+
+        let status = self.status();
+        if status != WPoolStatus::Paused || matches!(status, WPoolStatus::Stopped(_)) {
             return;
         }
-        self.unpause_signal.drop_sender();
+
+        // Close 'unpause signal' channel to unblock all workers.
+        self.resume_signal.drop_sender();
         self.set_status(WPoolStatus::Running);
     }
 
@@ -233,32 +240,19 @@ impl WPool {
             let wait_group = WaitGroup::new();
 
             loop {
-                // Processes tasks within the waiting queue.
-                // As long as the waiting queue isn't empty, incoming signals (on task channel)
-                // are put into the waiting queue and signals to run are taken from the waiting
-                // queue. Once the waiting queue is empty, then go back to submitting incoming
-                // signals directly to available workers.
+                // See `process_waiting_queue` comments for more info.
                 if !safe_lock(&waiting_queue).is_empty() {
-                    match task_receiver.try_recv() {
-                        Ok(signal) => {
-                            safe_lock(&waiting_queue).push_back(signal);
-                        }
-                        Err(TryRecvError::Empty) => {
-                            let mut wq = safe_lock(&waiting_queue);
-                            if let Some(signal) = wq.front()
-                                && let Ok(_) = worker_sender.try_send(signal.clone())
-                            {
-                                wq.pop_front();
-                            }
-                        }
-                        Err(_) => {
-                            break;
-                        } // Task channel closed.
-                    };
+                    if !Self::process_waiting_queue(
+                        Arc::clone(&waiting_queue),
+                        task_receiver.clone(),
+                        worker_sender.clone(),
+                    ) {
+                        break;
+                    }
                     continue;
                 }
 
-                //let signal = match task_receiver.recv() {
+                // Grab task from task channel.
                 let signal = match task_receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
                     Ok(signal) => signal,
                     Err(RecvTimeoutError::Timeout) => {
@@ -272,6 +266,7 @@ impl WPool {
                     Err(_) => break,
                 };
 
+                // Got a task.
                 if worker_count.load(Ordering::SeqCst) >= max_workers {
                     safe_lock(&waiting_queue).push_back(signal);
                 } else {
@@ -298,23 +293,32 @@ impl WPool {
         })
     }
 
-    /// `spawn_worker` spawns a new thread that acts as a worker. Unless the pool using `min_workers`,
-    /// a worker will timeout after an entire cycle of being idle. The idle timeout cycle is ~4 seconds.
-    fn spawn_worker(signal: Signal, wait_group: WaitGroup, worker_receiver: Receiver<Signal>) {
-        thread::spawn(move || {
-            let mut signal_opt = Some(signal);
-            while signal_opt.is_some() {
-                match signal_opt.take().expect("is_some()") {
-                    Signal::NewTask(task) => task.run(),
-                    Signal::Terminate => break,
-                }
-                signal_opt = match worker_receiver.recv() {
-                    Ok(signal) => Some(signal),
-                    Err(_) => break,
+    /// Processes tasks within the waiting queue.
+    /// As long as the waiting queue isn't empty, incoming signals (on task channel)
+    /// are put into the waiting queue and signals to run are taken from the waiting
+    /// queue. Once the waiting queue is empty, then go back to submitting incoming
+    /// signals directly to available workers.
+    fn process_waiting_queue(
+        waiting_queue: Arc<Mutex<VecDeque<Signal>>>,
+        task_receiver: Receiver<Signal>,
+        worker_sender: Sender<Signal>,
+    ) -> bool {
+        match task_receiver.try_recv() {
+            Ok(signal) => {
+                safe_lock(&waiting_queue).push_back(signal);
+            }
+            Err(TryRecvError::Empty) => {
+                let mut waiting_queue = safe_lock(&waiting_queue);
+                if let Some(signal) = waiting_queue.front()
+                    && let Ok(_) = worker_sender.try_send(signal.clone())
+                {
+                    waiting_queue.pop_front();
                 }
             }
-            wait_group.done();
-        });
+            // Task channel closed.
+            Err(_) => return false,
+        };
+        true
     }
 
     /// Essentially drains the wait_queue.
@@ -323,31 +327,55 @@ impl WPool {
         worker_sender: Sender<Signal>,
     ) {
         // Acquire lock for entirety of this process.
-        let mut wq = safe_lock(&waiting_queue);
-        while !wq.is_empty() {
-            if wq.front().is_some() {
-                let signal = wq.pop_front().expect("front");
+        let mut waiting_queue = safe_lock(&waiting_queue);
+        while !waiting_queue.is_empty() {
+            if waiting_queue.front().is_some() {
+                let signal = waiting_queue.pop_front().expect("front");
                 let _ = worker_sender.send(signal);
             }
         }
     }
 
+    /// `spawn_worker` spawns a new thread that acts as a worker. Unless the pool using `min_workers`,
+    /// a worker will timeout after an entire cycle of being idle. The idle timeout cycle is ~4 seconds.
+    fn spawn_worker(signal: Signal, wait_group: WaitGroup, worker_receiver: Receiver<Signal>) {
+        thread::spawn(move || {
+            let mut signal_maybe = Some(signal);
+
+            while signal_maybe.is_some() {
+                match signal_maybe.take().expect("is_some()") {
+                    Signal::NewTask(task) => task.run(),
+                    Signal::Terminate => break,
+                }
+                signal_maybe = match worker_receiver.recv() {
+                    Ok(signal) => Some(signal),
+                    Err(_) => break,
+                }
+            }
+
+            wait_group.done();
+        });
+    }
+
     fn shutdown(&self, wait: bool) {
         self.stop_once.call_once(|| {
             self.resume();
-            let pause_lock = safe_lock(&self.stop_lock);
+            // Acquire shutdown lock so we can wait for any in-progress pauses.
+            let shutdown_lock = safe_lock(&self.shutdown_lock);
             self.set_status(WPoolStatus::Stopped(wait));
-            drop(pause_lock);
+            drop(shutdown_lock);
+            // Close tasks channel.
             self.task_sender.drop();
         });
+
         if let Some(handle) = safe_lock(&self.dispatch_handle).take() {
             let _ = handle.join();
         }
     }
 
-    /// Submit a Signal to the "task channel".
+    /// Submit a Signal to the task channel.
     fn submit_signal(&self, signal: Signal) {
-        if self.is_stopped() {
+        if matches!(self.status(), WPoolStatus::Stopped(_)) {
             return;
         }
         let _ = self.task_sender.send(signal);
@@ -359,21 +387,5 @@ impl WPool {
 
     fn set_status(&self, status: WPoolStatus) {
         self.status.store(status.as_u8(), Ordering::SeqCst);
-    }
-
-    fn _is_running(&self) -> bool {
-        self.status() == WPoolStatus::Running
-    }
-
-    fn is_paused(&self) -> bool {
-        self.status() == WPoolStatus::Paused
-    }
-
-    fn is_stopped(&self) -> bool {
-        matches!(self.status(), WPoolStatus::Stopped(_))
-    }
-
-    fn _is_stopped_waiting(&self) -> bool {
-        self.status() == WPoolStatus::Stopped(true)
     }
 }
