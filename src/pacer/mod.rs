@@ -1,9 +1,13 @@
 #![allow(dead_code)]
-//!
 //! Pacer provides a utility to limit the rate at which concurrent
 //! threads begin execution. This addresses situations where running the
 //! concurrent threads is OK, as long as their execution does not start at the
 //! same time.
+//!
+//! # Important!
+//!
+//! **Do not call `.stop()`` until all paced tasks have completed!!!**
+//! Otherwise, paced tasks will hang waiting for pacer to unblock them.
 //!
 //! # Examples
 //!
@@ -52,11 +56,39 @@
 //! assert_eq!(counter.load(Ordering::SeqCst), 1);
 //! ```
 //!
-//! # Important
+//! ## Use `next` to pace regular functions
 //!
-//! **NOTE: Do not call pacer.stop() until all paced tasks have completed!!!
-//! Otherwise, paced tasks will hang waiting for pacer to unblock them.**
+//! By "regular functions", we mean functions not wrapped in `PacedFn`.
 //!
+//! ```rust
+//! let delay = Duration::from_millis(50);
+//! let pacer = Pacer::new(delay);
+//! let counter = AtomicUsize::new(0);
+//! let num_calls = 10;
+//!
+//! // Not a `PacedFn`
+//! fn not_a_paced_fn(counter: &AtomicUsize, pacer: &Pacer) {
+//!     pacer.next();
+//!     counter.fetch_add(1, Ordering::SeqCst);
+//! }
+//!
+//! // For example, this is a `PacedFn`
+//! // `let paced_fn = pacer.pace(|| { ... });``
+//!
+//! let start = Instant::now();
+//!
+//! for _ in 0..num_calls {
+//!     not_a_paced_fn(&counter, &pacer);
+//! }
+//!
+//! let elapsed = start.elapsed();
+//! let expected_runtime = delay * num_calls;
+//! assert!(
+//!     elapsed >= expected_runtime,
+//!     "pacing failed! expected elapsed ({elapsed:#.2?}) >= expected_runtime ({expected_runtime:#.2?})"
+//! );
+//! assert_eq!(counter.load(Ordering::SeqCst), num_calls as usize);
+//! ```
 use std::{
     sync::{
         Arc, Mutex,
@@ -71,8 +103,8 @@ use crate::{
     safe_lock,
 };
 
-/// PacerFn is a type alias for a thread-safe Fn().
-pub type PacerFn = Arc<dyn Fn() + Send + Sync + 'static>;
+/// Type alias for a thread-safe Fn().
+pub type PacedFn = Arc<dyn Fn() + Send + Sync + 'static>;
 
 pub struct Pacer {
     delay: Duration,
@@ -103,7 +135,7 @@ impl Pacer {
     /// Wraps a function in a paced function. The returned paced function can
     /// then be submitted to a `WPool`, using `submit` or `submit_wait`, and
     /// starting the tasks is paced according to the pacer's delay.
-    pub fn pace<F>(&self, f: F) -> PacerFn
+    pub fn pace<F>(&self, f: F) -> PacedFn
     where
         F: Fn() + Send + Sync + 'static,
     {
@@ -116,6 +148,7 @@ impl Pacer {
     }
 
     /// Next submits a run request to the gate and returns when it is time to run.
+    /// This allows you to manually pace functions non wrapped in `PacedFn`.
     pub fn next(&self) {
         // Wait for item to be read from gate.
         let _ = self.gate.send(());
@@ -173,7 +206,7 @@ mod tests {
             atomic::{AtomicUsize, Ordering},
         },
         thread,
-        time::{self, Duration},
+        time::{Duration, Instant},
     };
 
     use crate::{WPool, WaitGroup, pacer::Pacer};
@@ -191,7 +224,7 @@ mod tests {
         let tasks_done = WaitGroup::new();
         tasks_done.add(20);
 
-        let start = time::Instant::now();
+        let start = Instant::now();
 
         let tasks_done_pacer = tasks_done.clone();
         let paced_task = pacer.pace(move || {
@@ -236,6 +269,70 @@ mod tests {
             elapsed < expected_minimum_elapsed,
             "Did not pace tasks correctly, finished too soon! Expected elapsed = {expected_minimum_elapsed:?} | actual elapsed = {elapsed:?}"
         );
+    }
+
+    #[test]
+    fn test_next_paces_non_paced_fns() {
+        let num_calls = 10;
+        let delay = Duration::from_millis(50);
+        let pacer = Pacer::new(delay);
+
+        let counter = AtomicUsize::new(0);
+
+        // Not a `PacedFn`
+        fn not_a_paced_fn(counter: &AtomicUsize, pacer: &Pacer) {
+            pacer.next();
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
+
+        // For example, this is a `PacedFn`
+        // `let paced_fn = pacer.pace(|| { ... });``
+
+        let start = Instant::now();
+
+        for _ in 0..num_calls {
+            not_a_paced_fn(&counter, &pacer);
+        }
+
+        pacer.stop();
+
+        let elapsed = start.elapsed();
+        let expected_runtime = delay * num_calls;
+        assert!(
+            elapsed >= expected_runtime,
+            "pacing failed! expected elapsed ({elapsed:#.2?}) >= expected_runtime ({expected_runtime:#.2?})"
+        );
+        assert_eq!(counter.load(Ordering::SeqCst), num_calls as usize);
+    }
+
+    #[test]
+    fn test_paced_task_respects_delay() {
+        let num_calls = 10;
+        let delay = Duration::from_millis(50);
+        let pacer = Pacer::new(delay);
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = Arc::clone(&counter);
+
+        let paced_fn = pacer.pace(move || {
+            counter_clone.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let start = Instant::now();
+
+        for _ in 0..num_calls {
+            paced_fn();
+        }
+
+        pacer.stop();
+
+        let elapsed = start.elapsed();
+        let expected_runtime = delay * num_calls;
+        assert!(
+            elapsed >= expected_runtime,
+            "pacing failed! expected elapsed ({elapsed:#.2?}) >= expected_runtime ({expected_runtime:#.2?})"
+        );
+        assert_eq!(counter.load(Ordering::SeqCst), num_calls as usize);
     }
 
     #[test]
