@@ -472,6 +472,45 @@ fn test_pause_resume_resets_resume_channel() {
 }
 
 #[test]
+fn test_example_get_results_from_task() {
+    let max_workers = 2;
+    let wp = WPool::new(max_workers);
+
+    let (tx, rx) = mpsc::sync_channel::<u8>(0);
+
+    let tx_clone = tx.clone();
+    wp.submit(move || {
+        thread::sleep(Duration::from_millis(500));
+
+        //
+        // Pretend we are running code here that performs some task..
+        //
+
+        let result_from_task = 69;
+        if let Err(e) = tx_clone.send(result_from_task) {
+            println!("error sending results to main thread from worker! : Error={e:?}");
+        }
+        println!("success! sent results from worker to main!");
+    });
+
+    // Pause until we get our result. This is not necessary in this case, as
+    // our channel can act as a pseudo pauser.
+    // If we were using an unbounded channel, we may want to use pause ot wait
+    // for the result of any running task (like if we need to use the result elsewhere).
+    //
+    // wp.pause();
+
+    match rx.recv() {
+        Ok(result) => assert_eq!(result, 69),
+        Err(_) => {
+            panic!("expected this not to fail and let us receive results from worker via channel.")
+        }
+    };
+
+    wp.stop_wait();
+}
+
+#[test]
 fn test_idle_worker() {
     let max_workers = 3;
     let num_jobs = max_workers + 1;

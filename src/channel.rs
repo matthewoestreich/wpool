@@ -11,6 +11,9 @@ use std::{
 
 use crate::safe_lock;
 
+/********************** bounded ***************************************/
+
+/// Create new bounded channel. Channel with capacity.
 pub(crate) fn bounded<T>(capacity: usize) -> Channel<T> {
     let (tx, rx) = mpsc::sync_channel::<T>(capacity);
     Channel {
@@ -21,6 +24,9 @@ pub(crate) fn bounded<T>(capacity: usize) -> Channel<T> {
     }
 }
 
+/********************** unbounded **************************************/
+
+/// Create new unbounded channel.
 pub(crate) fn unbounded<T>() -> Channel<T> {
     let (tx, rx) = mpsc::channel::<T>();
     Channel {
@@ -30,6 +36,8 @@ pub(crate) fn unbounded<T>() -> Channel<T> {
         },
     }
 }
+
+/********************** Sender *****************************************/
 
 #[derive(Debug)]
 pub(crate) enum Sender<T> {
@@ -96,6 +104,8 @@ impl<T> Clone for Sender<T> {
     }
 }
 
+/********************** Receiver ***************************************/
+
 #[derive(Debug)]
 pub(crate) struct Receiver<T> {
     inner: Arc<Mutex<mpsc::Receiver<T>>>,
@@ -110,6 +120,10 @@ impl<T> Receiver<T> {
 
     pub(crate) fn recv(&self) -> Result<T, RecvError> {
         safe_lock(&self.inner).recv()
+    }
+
+    pub(crate) fn recv_iter(&self) -> RecvIter<'_, T> {
+        RecvIter { receiver: self }
     }
 
     pub(crate) fn try_recv(&self) -> Result<T, TryRecvError> {
@@ -128,6 +142,22 @@ impl<T> Clone for Receiver<T> {
         }
     }
 }
+
+/********************** RecvIter ***************************************/
+
+pub(crate) struct RecvIter<'a, T> {
+    receiver: &'a Receiver<T>,
+}
+
+impl<'a, T> Iterator for RecvIter<'a, T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.receiver.recv().ok()
+    }
+}
+
+/********************** ChannelKind *************************************/
 
 pub(crate) enum ChannelKind<T> {
     Unbounded {
@@ -149,9 +179,30 @@ impl<T> std::fmt::Debug for ChannelKind<T> {
     }
 }
 
+/********************** Channell ***************************************/
+
 #[derive(Debug)]
 pub(crate) struct Channel<T> {
     kind: ChannelKind<T>,
+}
+
+impl<T> Clone for Channel<T> {
+    fn clone(&self) -> Self {
+        match &self.kind {
+            ChannelKind::Unbounded { sender, receiver } => Self {
+                kind: ChannelKind::Unbounded {
+                    sender: sender.clone(),
+                    receiver: receiver.clone(),
+                },
+            },
+            ChannelKind::Bounded { sender, receiver } => Self {
+                kind: ChannelKind::Bounded {
+                    sender: sender.clone(),
+                    receiver: receiver.clone(),
+                },
+            },
+        }
+    }
 }
 
 impl<T> Channel<T> {
@@ -173,6 +224,13 @@ impl<T> Channel<T> {
         match &self.kind {
             ChannelKind::Unbounded { receiver, .. } => receiver.recv_timeout(timeout),
             ChannelKind::Bounded { receiver, .. } => receiver.recv_timeout(timeout),
+        }
+    }
+
+    pub(crate) fn recv_iter(&self) -> RecvIter<'_, T> {
+        match &self.kind {
+            ChannelKind::Unbounded { receiver, .. } => receiver.recv_iter(),
+            ChannelKind::Bounded { receiver, .. } => receiver.recv_iter(),
         }
     }
 

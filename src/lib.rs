@@ -51,6 +51,47 @@
 //! // the waiting queue has been processed.
 //! pool.stop_wait();
 //! ```
+//!
+//! ## Get a result out of submitted task
+//!
+//! ```rust
+//! let max_workers = 2;
+//! let wp = WPool::new(max_workers);
+//! let (tx, rx) = mpsc::sync_channel::<u8>(0);
+//!
+//! let tx_clone = tx.clone();
+//! wp.submit(move || {
+//!     //
+//!     // Do work here.
+//!     //
+//!     thread::sleep(Duration::from_millis(500));
+//!     //
+//!     let result_from_doing_work = 69;
+//!     //
+//!
+//!     if let Err(e) = tx_clone.send(result_from_doing_work) {
+//!         println!("error sending results to main thread from worker! : Error={e:?}");
+//!     } else {
+//!         println!("success! sent results from worker to main!");
+//!     }
+//! });
+//!
+//! // Pause until we get our result. This is not necessary in this case, as
+//! // our channel can act as a pseudo pauser.
+//! // If we were using an unbounded channel, we may want to use pause in order to wait
+//! // for the result of any running task (like if we need to use the result elsewhere).
+//! //
+//! // wp.pause();
+//!
+//! match rx.recv() {
+//!     Ok(result) => assert_eq!(result, 69),
+//!     Err(_) => {
+//!         panic!("expected this not to fail and let us receive results from worker via channel.")
+//!     }
+//! };
+//!
+//! wp.stop_wait();
+//! ```
 #![allow(clippy::too_many_arguments)]
 #[cfg(test)]
 mod tests;
@@ -58,6 +99,7 @@ mod tests;
 mod channel;
 mod wpool;
 
+pub mod pacer;
 pub use wpool::WPool;
 
 use std::{
