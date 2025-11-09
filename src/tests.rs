@@ -1037,14 +1037,9 @@ fn test_long_running_job_continues_after_stop_wait() {
 
 #[test]
 fn test_large_amount_of_jobs() {
-    let cores = {
-        match std::thread::available_parallelism() {
-            Ok(parallelism) => parallelism.get(),
-            Err(_) => 4,
-        }
-    };
+    let cores = 12;
     let max_workers = cores * 2;
-    let num_jobs = if cores <= 7 { 10 } else { 1_000_000 };
+    let num_jobs = 500_000;
     let counter = Arc::new(AtomicUsize::new(0));
 
     let p = WPool::new(max_workers);
