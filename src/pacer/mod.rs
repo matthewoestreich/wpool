@@ -4,10 +4,9 @@
 //! concurrent threads is OK, as long as their execution does not start at the
 //! same time.
 //!
-//! # Important!
-//!
-//! **Do not call `.stop()`` until all paced tasks have completed!!!**
-//! Otherwise, paced tasks will hang waiting for pacer to unblock them.
+//! Calling `stop()` will wait or any functions that are currently executing
+//! to finish executing before the `Pacer` instance is "abandoned" (a `Pacer`
+//! instance is not reusable).
 //!
 //! # Examples
 //!
@@ -66,14 +65,27 @@
 //! let counter = AtomicUsize::new(0);
 //! let num_calls = 10;
 //!
+//! // For example, this is a `PacedFn`
+//! // `let paced_fn = pacer.pace(|| { ... });``
+//!
 //! // Not a `PacedFn`
 //! fn not_a_paced_fn(counter: &AtomicUsize, pacer: &Pacer) {
 //!     pacer.next();
 //!     counter.fetch_add(1, Ordering::SeqCst);
 //! }
 //!
-//! // For example, this is a `PacedFn`
-//! // `let paced_fn = pacer.pace(|| { ... });``
+//!
+//! // Or if you don't want to pass in a `Pacer`
+//! // instance to your non `PacedFn`:
+//! // ```rust
+//! // fn another_non_paced_fn() {
+//! //     // ...
+//! // }
+//! // for _ in 0..num_calls {
+//! //     pacer.next();
+//! //     another_non_paced_fn();
+//! // }
+//! // ```
 //!
 //! let start = Instant::now();
 //!
@@ -154,8 +166,9 @@ impl Pacer {
         let _ = self.gate.send(());
     }
 
-    /// Stops the Pacer from running. Do not call until all paced tasks have
-    /// completed, or paced tasks will hang waiting for pacer to unblock them.
+    /// Stops the Pacer from running. Waits for all tasks to complete before stopping.
+    /// A `Pacer` instance is not reusable, so consider any given pacer instance to be
+    /// abandoned after `stop()` has been called on it.
     pub fn stop(&self) {
         self.gate.drop_sender();
         if let Some(handle) = safe_lock(&self.run_handle).take() {
@@ -272,6 +285,24 @@ mod tests {
     }
 
     #[test]
+    fn test_stop_before_fns_finish() {
+        let pacer = Pacer::new(Duration::from_millis(100));
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        let c = Arc::clone(&counter);
+        let paced_fn = pacer.pace(move || {
+            thread::sleep(Duration::from_secs(1));
+            c.fetch_add(1, Ordering::SeqCst);
+        });
+
+        paced_fn();
+
+        pacer.stop();
+
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
     fn test_next_paces_non_paced_fns() {
         let num_calls = 10;
         let delay = Duration::from_millis(50);
@@ -293,6 +324,18 @@ mod tests {
         for _ in 0..num_calls {
             not_a_paced_fn(&counter, &pacer);
         }
+
+        // Or if you don't want to pass in a `Pacer` instance
+        // to your non `PacedFn`:
+        // ```rust
+        // fn another_non_paced_fn() {
+        //     // ...
+        // }
+        // for _ in 0..num_calls {
+        //     pacer.next();
+        //     another_non_paced_fn();
+        // }
+        // ```
 
         pacer.stop();
 

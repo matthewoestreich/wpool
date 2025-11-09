@@ -1,6 +1,6 @@
 # wpool
 
-[![Crates.io](https://img.shields.io/crates/v/wpool.svg)](https://crates.io/crates/wpool)
+[![Crates.io](https://img.shields.io/crates/v/wpool.svg)](https://crates.io/crates/wpool) [![docs.rs](https://img.shields.io/docsrs/wpool?style=flat-square)](https://docs.rs/wpool/latest/wpool/)
 
 A thread pool that limits the number of tasks executing concurrently, without restricting how many tasks can be queued. Submitting tasks is non-blocking, so you can enqueue any number of tasks without waiting.
 
@@ -99,6 +99,8 @@ match rx.recv() {
 wp.stop_wait();
 ```
 
+# Pacer
+
 ## Use with `Pacer`
 
 Read more about `Pacer` [here](https://docs.rs/wpool/latest/wpool/pacer/index.html)
@@ -124,3 +126,50 @@ wp.submit(move || { wp_paced_fn() });
 wp.stop_wait();
 assert_eq!(counter.load(Ordering::SeqCst), 1);
 ```
+
+## User `pacer.next()` on non-`PacedFn`'s
+
+You can still pace functions not wrapped in `PacedFn`:
+
+````rust
+let delay = Duration::from_millis(50);
+let pacer = Pacer::new(delay);
+let counter = AtomicUsize::new(0);
+let num_calls = 10;
+
+// For example, this is a `PacedFn`:
+// `let paced_fn = pacer.pace(|| { ... });``
+
+// Not a `PacedFn`
+fn not_a_paced_fn(counter: &AtomicUsize, pacer: &Pacer) {
+    pacer.next();
+    counter.fetch_add(1, Ordering::SeqCst);
+}
+
+
+// Or if you don't want to pass in a `Pacer`
+// instance to your non `PacedFn`:
+// ```rust
+// fn another_non_paced_fn() {
+//     // ...
+// }
+// for _ in 0..num_calls {
+//     pacer.next();
+//     another_non_paced_fn();
+// }
+// ```
+
+let start = Instant::now();
+
+for _ in 0..num_calls {
+    not_a_paced_fn(&counter, &pacer);
+}
+
+let elapsed = start.elapsed();
+let expected_runtime = delay * num_calls;
+assert!(
+    elapsed >= expected_runtime,
+    "pacing failed! expected elapsed ({elapsed:#.2?}) >= expected_runtime ({expected_runtime:#.2?})"
+);
+assert_eq!(counter.load(Ordering::SeqCst), num_calls as usize);
+````
