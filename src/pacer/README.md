@@ -1,0 +1,1 @@
+This is in a separate folder because I'd like to make it a standalone crate at some point.
