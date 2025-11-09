@@ -56,8 +56,7 @@ impl WPool {
             Arc::clone(&worker_count),
             waiting_queue.clone(),
             task_channel.clone_receiver(),
-            worker_channel.clone_sender(),
-            worker_channel.clone_receiver(),
+            worker_channel.clone(),
             Arc::clone(&is_dispatch_ready),
         );
 
@@ -257,8 +256,7 @@ impl WPool {
         worker_count: Arc<AtomicUsize>,
         waiting_queue: ThreadedDeque<Signal>,
         task_receiver: Receiver<Signal>,
-        worker_sender: Sender<Signal>,
-        worker_receiver: Receiver<Signal>,
+        worker_channel: Channel<Signal>,
         is_ready: Arc<AtomicBool>,
     ) -> thread::JoinHandle<()> {
         thread::spawn(move || {
@@ -271,8 +269,11 @@ impl WPool {
             loop {
                 // See `process_waiting_queue` comments for more info.
                 if !waiting_queue.is_empty() {
-                    if !Self::process_waiting_queue(&waiting_queue, &task_receiver, &worker_sender)
-                    {
+                    if !Self::process_waiting_queue(
+                        &waiting_queue,
+                        &task_receiver,
+                        worker_channel.sender_ref(),
+                    ) {
                         break;
                     }
                     continue;
@@ -285,7 +286,7 @@ impl WPool {
                         // Keep `min_workers` alive.
                         if is_idle
                             && worker_count.load(Ordering::SeqCst) > min_workers
-                            && worker_sender.try_send(Signal::Terminate).is_ok()
+                            && worker_channel.try_send(Signal::Terminate).is_ok()
                         {
                             worker_count.fetch_sub(1, Ordering::SeqCst);
                         }
@@ -300,7 +301,7 @@ impl WPool {
                     waiting_queue.push_back(signal);
                 } else {
                     wait_group.add(1);
-                    Self::spawn_worker(signal, wait_group.clone(), worker_receiver.clone());
+                    Self::spawn_worker(signal, wait_group.clone(), worker_channel.clone_receiver());
                     worker_count.fetch_add(1, Ordering::SeqCst);
                 }
 
@@ -309,12 +310,12 @@ impl WPool {
 
             // If `stop_wait()` was called run tasks and waiting queue.
             if WPoolStatus::from_u8(status.load(Ordering::SeqCst)) == WPoolStatus::Stopped(true) {
-                Self::run_queued_tasks(&waiting_queue, &worker_sender);
+                Self::run_queued_tasks(&waiting_queue, worker_channel.sender_ref());
             }
 
             // Terminate workers as they become available.
             for _ in 0..worker_count.load(Ordering::SeqCst) {
-                let _ = worker_sender.send(Signal::Terminate);
+                let _ = worker_channel.send(Signal::Terminate);
                 worker_count.fetch_sub(1, Ordering::SeqCst);
             }
 

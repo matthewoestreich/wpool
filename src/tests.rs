@@ -183,6 +183,34 @@ fn test_basic() {
 }
 
 #[test]
+fn test_min_workers_basic() {
+    let max_workers = 2;
+    let min_workers = 1;
+    let wp = WPool::new_with_min(max_workers, min_workers);
+    for _ in 0..max_workers {
+        wp.submit(move || {
+            thread::sleep(Duration::from_micros(1));
+        });
+    }
+    // Make sure max_workers amount of timeout time has passed.
+    let sleep_for = ((max_workers + 1) as u32) * WORKER_IDLE_TIMEOUT;
+    thread::sleep(sleep_for);
+    // Should only have 'min_workers' alive
+    assert_eq!(
+        min_workers,
+        wp.worker_count(),
+        "expected {min_workers} to be alive, got {}",
+        wp.worker_count()
+    );
+    wp.stop_wait(); // No leaks
+}
+
+#[test]
+fn test_stop_wait_stress() {
+    run_test_n_times(500, 0, false, test_stop_wait_basic);
+}
+
+#[test]
 fn test_stop_wait_basic() {
     let max_workers = 3;
     let num_jobs = max_workers * max_workers;
@@ -190,12 +218,11 @@ fn test_stop_wait_basic() {
 
     let p = WPool::new(max_workers);
 
-    for i in 0..num_jobs {
+    for _ in 0..num_jobs {
         let counter_clone = counter.clone();
         p.submit(move || {
-            thread::sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_micros(1));
             counter_clone.fetch_add(1, Ordering::SeqCst);
-            println!("job {i:?} done");
         });
     }
     p.stop_wait();
@@ -323,27 +350,6 @@ fn test_stop_wait_does_not_abandoned_waiting_queue() {
             "Expected waiting queue to be processed after calling stop_wait()! Instead, we have {len} items in wait queue!",
         );
     });
-}
-
-#[test]
-fn test_min_workers_basic() {
-    let max_workers = 5;
-    let min_workers = 3;
-
-    let wp = WPool::new_with_min(max_workers, min_workers);
-
-    for _ in 0..max_workers {
-        wp.submit(|| {
-            thread::sleep(Duration::from_millis(1));
-        });
-    }
-
-    // give pool time to process
-    thread::sleep(Duration::from_millis(5));
-    assert_eq!(wp.worker_count(), max_workers);
-    // Wait for workers to terminate
-    thread::sleep(WORKER_IDLE_TIMEOUT * ((min_workers + 1) as u32));
-    assert_eq!(wp.worker_count(), min_workers);
 }
 
 #[test]
@@ -508,29 +514,6 @@ fn test_example_get_results_from_task() {
     };
 
     wp.stop_wait();
-}
-
-#[test]
-fn test_min_workers() {
-    let max_workers = 4;
-    let min_workers = 2;
-    let wp = WPool::new_with_min(max_workers, min_workers);
-    for _ in 0..max_workers {
-        wp.submit(move || {
-            thread::sleep(Duration::from_micros(1));
-        });
-    }
-    // Make sure max_workers amount of timeout time has passed.
-    let sleep_for = ((max_workers + max_workers) as u32) * WORKER_IDLE_TIMEOUT;
-    thread::sleep(sleep_for);
-    // Should only have 'min_workers' alive
-    assert_eq!(
-        min_workers,
-        wp.worker_count(),
-        "expected {min_workers} to be alive, got {}",
-        wp.worker_count()
-    );
-    wp.stop_wait(); // No leaks
 }
 
 #[test]
