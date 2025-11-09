@@ -146,7 +146,6 @@ fn not_a_paced_fn(counter: &AtomicUsize, pacer: &Pacer) {
     counter.fetch_add(1, Ordering::SeqCst);
 }
 
-
 // Or if you don't want to pass in a `Pacer`
 // instance to your non `PacedFn`:
 // ```rust
