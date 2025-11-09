@@ -122,52 +122,6 @@ fn test_serial_test_sanity_2() {
 //######################################################################
 
 #[test]
-fn test_overflow_stress() {
-    run_test_n_times(500, 0, false, test_overflow);
-}
-
-#[test]
-#[serial_test::serial]
-fn test_overflow() {
-    let max_workers = 2;
-    let num_jobs = 64;
-    let expected_len = 62;
-    let release_chan = unbounded::<()>();
-    let wait_group = WaitGroup::new_with_delta(max_workers);
-    let is_ready = wait_group.clone();
-    let p = WPool::new(max_workers);
-    // Start workers, and have them all wait on a channel before completing.
-    for _ in 0..num_jobs {
-        let thread_release_receiver = release_chan.clone_receiver();
-        let thread_ready = is_ready.clone();
-        p.submit(move || {
-            thread_ready.done();
-            let _ = thread_release_receiver.recv();
-            thread::sleep(Duration::from_millis(1));
-        });
-    }
-
-    wait_group.wait();
-
-    // Start a thread to free the workers.
-    let release_handle = thread::spawn(move || {
-        // Release workers by closing release_chan (drop sender).
-        release_chan.drop_sender();
-    });
-
-    p.stop();
-
-    // Now that the pool has exited, it is safe to inspect its waiting
-    // queue without causing a race.
-    let wq_len = p._waiting_queue_len();
-    assert_eq!(
-        wq_len, expected_len,
-        "Expected waiting to queue to have len of '{expected_len}' but got '{wq_len}'"
-    );
-    let _ = release_handle.join();
-}
-
-#[test]
 fn test_basic() {
     let p = WPool::new(3);
     p.wait_ready();
@@ -202,6 +156,148 @@ fn test_min_workers_basic() {
         wp.worker_count()
     );
     wp.stop_wait(); // No leaks
+}
+
+#[test]
+fn test_panic_in_worker() {
+    run_test_with_timeout(Duration::from_secs(2), || {
+        let max_workers = 2;
+        let wp = WPool::new(max_workers);
+
+        // Make all workers panic.
+        for _ in 0..max_workers {
+            wp.submit(move || {
+                panic!("__panic__");
+            });
+        }
+
+        // Try to submit more jobs.
+        let counter = Arc::new(AtomicUsize::new(0));
+        for _ in 0..max_workers {
+            let c = Arc::clone(&counter);
+            wp.submit(move || {
+                thread::sleep(Duration::from_millis(10));
+                c.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+
+        wp.stop_wait();
+        assert_eq!(counter.load(Ordering::SeqCst), max_workers);
+    });
+}
+
+#[test]
+fn test_multiple_panics_in_worker() {
+    run_test_with_timeout(Duration::from_secs(2), || {
+        let max_workers = 2;
+        let wp = WPool::new(max_workers);
+
+        // Make all workers panic.
+        for _ in 0..max_workers * max_workers {
+            wp.submit(move || {
+                panic!("__panic__1");
+            });
+        }
+
+        // Try to crash the respawned workers
+        for _ in 0..max_workers * max_workers {
+            wp.submit(move || {
+                panic!("__panic__2");
+            });
+        }
+
+        wp.pause();
+        assert_eq!(wp.worker_count(), max_workers);
+        wp.resume();
+
+        // Try to submit more jobs.
+        let counter = Arc::new(AtomicUsize::new(0));
+        for _ in 0..max_workers {
+            let c = Arc::clone(&counter);
+            wp.submit(move || {
+                thread::sleep(Duration::from_millis(10));
+                c.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+
+        wp.stop_wait();
+        assert_eq!(counter.load(Ordering::SeqCst), max_workers);
+    });
+}
+
+#[test]
+fn test_multiple_panics_in_worker_using_min_workers() {
+    let max_workers = 4;
+    let min_workers = 2;
+    let wp = WPool::new_with_min(max_workers, min_workers);
+
+    let sleep_for = WORKER_IDLE_TIMEOUT * ((max_workers + 1) as u32);
+
+    // Make all workers panic.
+    for _ in 0..max_workers * max_workers {
+        wp.submit(move || {
+            panic!("__panic__1");
+        });
+    }
+
+    // Try to crash the respawned workers
+    for _ in 0..max_workers * max_workers {
+        wp.submit(move || {
+            panic!("__panic__2");
+        });
+    }
+
+    // Let enough time pass that workers timeout.
+    thread::sleep(sleep_for);
+    // Should leave us with `min_workers` amount alive.
+    assert_eq!(wp.worker_count(), min_workers);
+
+    // Pausing should fill workers back up to max_workers.
+    wp.pause();
+
+    assert_eq!(
+        wp.worker_count(),
+        max_workers,
+        "expected {max_workers} workers, got {}",
+        wp.worker_count()
+    );
+
+    wp.resume();
+
+    // Try to submit more jobs.
+    let wg = WaitGroup::new_with_delta(max_workers);
+    let releaser = unbounded::<()>();
+    let counter = Arc::new(AtomicUsize::new(0));
+    for _ in 0..max_workers {
+        let c = Arc::clone(&counter);
+        let r = releaser.clone_receiver();
+        let w = wg.clone();
+        wp.submit(move || {
+            c.fetch_add(1, Ordering::SeqCst);
+            w.done();
+            let _ = r.recv();
+        });
+    }
+
+    // Wait until all jobs get to recv(), so we know all workers have been started.
+    wg.wait();
+    // Unblock workers
+    releaser.drop_sender();
+    assert_eq!(counter.load(Ordering::SeqCst), max_workers);
+
+    // Let enough time pass so that idle workers are terminated.
+    // Should leave us with `min_workers` amount still alive.
+    thread::sleep(sleep_for);
+
+    assert_eq!(
+        wp.worker_count(),
+        min_workers,
+        "expected {min_workers} workers, got {}",
+        wp.worker_count()
+    );
+
+    // Cleanup so no leaks.
+    wp.stop_wait();
 }
 
 #[test]
@@ -362,6 +458,52 @@ fn test_pause_basic() {
     p.pause();
     p.resume();
     p.stop_wait();
+}
+
+#[test]
+fn test_overflow_stress() {
+    run_test_n_times(500, 0, false, test_overflow);
+}
+
+#[test]
+#[serial_test::serial]
+fn test_overflow() {
+    let max_workers = 2;
+    let num_jobs = 64;
+    let expected_len = 62;
+    let release_chan = unbounded::<()>();
+    let wait_group = WaitGroup::new_with_delta(max_workers);
+    let is_ready = wait_group.clone();
+    let p = WPool::new(max_workers);
+    // Start workers, and have them all wait on a channel before completing.
+    for _ in 0..num_jobs {
+        let thread_release_receiver = release_chan.clone_receiver();
+        let thread_ready = is_ready.clone();
+        p.submit(move || {
+            thread_ready.done();
+            let _ = thread_release_receiver.recv();
+            thread::sleep(Duration::from_millis(1));
+        });
+    }
+
+    wait_group.wait();
+
+    // Start a thread to free the workers.
+    let release_handle = thread::spawn(move || {
+        // Release workers by closing release_chan (drop sender).
+        release_chan.drop_sender();
+    });
+
+    p.stop();
+
+    // Now that the pool has exited, it is safe to inspect its waiting
+    // queue without causing a race.
+    let wq_len = p._waiting_queue_len();
+    assert_eq!(
+        wq_len, expected_len,
+        "Expected waiting to queue to have len of '{expected_len}' but got '{wq_len}'"
+    );
+    let _ = release_handle.join();
 }
 
 #[test]

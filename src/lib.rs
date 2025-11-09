@@ -106,13 +106,53 @@ use std::{
         Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicUsize, Ordering},
     },
+    thread,
 };
+
+use crate::channel::Receiver;
 
 // One-liner that allows us to easily lock a Mutex while handling possible poison.
 pub(crate) fn safe_lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     match m.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/************************************* ThreadGuardian ************************************/
+
+/// ThreadGuardian sits in a worker thread to detect a panic within said thread.
+/// We use `impl Drop` to detect if `thread::panicking()` is true.
+/// If a panic has been detected, the ThreadGuardian instance will call the provided
+/// `FnOnce` to recover the panicked worker thread.
+pub(crate) struct ThreadGuardian {
+    thread_respawn_fn: Option<Box<dyn FnOnce() + Send + 'static>>,
+}
+
+impl ThreadGuardian {
+    pub(crate) fn new<F>(
+        wait_group: WaitGroup,
+        worker_receiver: Receiver<Signal>,
+        spawn_worker_fn: F,
+    ) -> Self
+    where
+        F: FnOnce(Signal, WaitGroup, Receiver<Signal>) + Send + 'static,
+    {
+        Self {
+            thread_respawn_fn: Some(Box::new(move || {
+                spawn_worker_fn(Signal::NewTask(Task::noop()), wait_group, worker_receiver)
+            })),
+        }
+    }
+}
+
+impl Drop for ThreadGuardian {
+    fn drop(&mut self) {
+        if thread::panicking()
+            && let Some(f) = self.thread_respawn_fn.take()
+        {
+            f();
+        }
     }
 }
 
@@ -196,12 +236,19 @@ pub(crate) struct Task {
 impl Task {
     pub fn new(f: TaskFn) -> Self {
         let f = Mutex::new(Some(f));
-        let inner = Arc::new(move || {
-            if let Some(f) = safe_lock(&f).take() {
-                f();
-            }
-        });
-        Task { inner }
+        Self {
+            inner: Arc::new(move || {
+                if let Some(f) = safe_lock(&f).take() {
+                    f();
+                }
+            }),
+        }
+    }
+
+    pub fn noop() -> Self {
+        Self {
+            inner: Arc::new(|| {}),
+        }
     }
 
     pub fn run(&self) {

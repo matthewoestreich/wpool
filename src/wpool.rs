@@ -9,7 +9,7 @@ use std::{
 };
 
 use crate::{
-    Signal, Task, ThreadedDeque, WPoolStatus, WaitGroup,
+    Signal, Task, ThreadGuardian, ThreadedDeque, WPoolStatus, WaitGroup,
     channel::{Channel, Receiver, Sender, bounded, unbounded},
     safe_lock,
 };
@@ -361,7 +361,14 @@ impl WPool {
     /// a worker will timeout after an entire cycle of being idle. The idle timeout cycle is ~4 seconds.
     fn spawn_worker(signal: Signal, wait_group: WaitGroup, worker_receiver: Receiver<Signal>) {
         thread::spawn(move || {
+            let _tg = ThreadGuardian::new(
+                wait_group.clone(),
+                worker_receiver.clone(),
+                Self::spawn_worker,
+            );
+
             let mut signal_maybe = Some(signal);
+
             while signal_maybe.is_some() {
                 match signal_maybe.take().expect("is_some()") {
                     Signal::NewTask(task) => task.run(),
@@ -372,6 +379,7 @@ impl WPool {
                     Err(_) => break,
                 }
             }
+
             wait_group.done();
         });
     }
