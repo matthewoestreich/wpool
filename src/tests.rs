@@ -159,7 +159,7 @@ fn test_min_workers_basic() {
 }
 
 #[test]
-fn test_panic_in_worker() {
+fn test_thread_guardian_panic_in_worker() {
     run_test_with_timeout(Duration::from_secs(2), || {
         let max_workers = 2;
         let wp = WPool::new(max_workers);
@@ -187,7 +187,7 @@ fn test_panic_in_worker() {
 }
 
 #[test]
-fn test_multiple_panics_in_worker() {
+fn test_thread_guardian_multiple_panics_in_worker() {
     run_test_with_timeout(Duration::from_secs(2), || {
         let max_workers = 2;
         let wp = WPool::new(max_workers);
@@ -226,7 +226,7 @@ fn test_multiple_panics_in_worker() {
 }
 
 #[test]
-fn test_multiple_panics_in_worker_using_min_workers() {
+fn test_thread_guardian_multiple_panics_in_worker_using_min_workers() {
     let max_workers = 4;
     let min_workers = 2;
     let wp = WPool::new_with_min(max_workers, min_workers);
