@@ -123,6 +123,7 @@ pub(crate) fn safe_lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WPoolStatus {
+    Starting,
     Running,
     Paused,
     Stopped(bool),
@@ -131,19 +132,21 @@ pub(crate) enum WPoolStatus {
 impl WPoolStatus {
     pub(crate) fn as_u8(&self) -> u8 {
         match self {
-            Self::Running => 0,
-            Self::Paused => 1,
-            Self::Stopped(false) => 2,
-            Self::Stopped(true) => 3,
+            Self::Starting => 0,
+            Self::Running => 1,
+            Self::Paused => 2,
+            Self::Stopped(false) => 3,
+            Self::Stopped(true) => 4,
         }
     }
 
     pub(crate) fn from_u8(v: u8) -> Self {
         match v {
-            0 => Self::Running,
-            1 => Self::Paused,
-            2 => Self::Stopped(false),
-            3 => Self::Stopped(true),
+            0 => Self::Starting,
+            1 => Self::Running,
+            2 => Self::Paused,
+            3 => Self::Stopped(false),
+            4 => Self::Stopped(true),
             _ => unreachable!(),
         }
     }
@@ -152,6 +155,7 @@ impl WPoolStatus {
 impl Display for WPoolStatus {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
+            WPoolStatus::Starting => write!(f, "WPoolStatus::Starting"),
             WPoolStatus::Running => write!(f, "WPoolStatus::Running"),
             WPoolStatus::Paused => write!(f, "WPoolStatus::Paused"),
             WPoolStatus::Stopped(wait) => write!(f, "WPoolStatus::Stopped(wait={wait})"),

@@ -1,7 +1,7 @@
 use std::{
     sync::{
         Arc, Mutex, Once,
-        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicU8, AtomicUsize, Ordering},
         mpsc::{self, RecvTimeoutError, TryRecvError},
     },
     thread,
@@ -21,7 +21,6 @@ pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 /// so you can enqueue any number of tasks without waiting.
 pub struct WPool {
     dispatch_handle: Mutex<Option<thread::JoinHandle<()>>>,
-    dispatch_ready: Arc<AtomicBool>,
     max_workers: usize,
     min_workers: usize,
     shutdown_lock: Mutex<Channel<()>>,
@@ -41,7 +40,6 @@ impl WPool {
         let waiting_queue = ThreadedDeque::new();
         let worker_channel = bounded(0);
         let task_channel = unbounded();
-        let dispatch_ready = Arc::new(AtomicBool::new(false));
 
         let min_workers = if min_workers > max_workers {
             max_workers
@@ -57,12 +55,10 @@ impl WPool {
             waiting_queue.clone(),
             task_channel.clone_receiver(),
             worker_channel.clone(),
-            Arc::clone(&dispatch_ready),
         );
 
         Self {
             dispatch_handle: Mutex::new(Some(dispatch_handle)),
-            dispatch_ready,
             max_workers,
             min_workers,
             shutdown_lock: Mutex::new(unbounded()),
@@ -226,7 +222,7 @@ impl WPool {
     /// Flag that is set by dispatcher after the dispatcher thread is started but
     /// just prior to entering the main dispatcher loop.
     pub fn wait_ready(&self) {
-        while !self.dispatch_ready.load(Ordering::SeqCst) {
+        while self.status() != WPoolStatus::Running {
             thread::yield_now();
         }
     }
@@ -250,14 +246,13 @@ impl WPool {
         waiting_queue: ThreadedDeque<Signal>,
         task_receiver: Receiver<Signal>,
         worker_channel: Channel<Signal>,
-        is_ready: Arc<AtomicBool>,
     ) -> thread::JoinHandle<()> {
         thread::spawn(move || {
             let mut is_idle = false;
             let wait_group = WaitGroup::new();
 
-            // Just before starting loop, set ready flag.
-            is_ready.store(true, Ordering::SeqCst);
+            // Just before starting loop, set running status.
+            status.store(WPoolStatus::Running.as_u8(), Ordering::SeqCst);
 
             loop {
                 // See `process_waiting_queue` comments for more info.
