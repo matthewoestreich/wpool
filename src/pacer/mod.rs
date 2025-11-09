@@ -299,19 +299,19 @@ mod tests {
             c.fetch_add(1, Ordering::SeqCst);
         });
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             paced_fn();
         });
 
         pacer.stop();
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+        let _ = handle.join(); // Cleanup after assert so test is not marked as leaky.
     }
 
     #[test]
     fn test_stop_before_fns_finish_does_not_panic_while_main_thread_alive() {
         let pacer = Pacer::new(Duration::from_millis(100));
         let counter = Arc::new(AtomicUsize::new(0));
-
         let paced_fn_sleep_dur = Duration::from_millis(1000);
         let keep_main_thread_alive_sleep_for = Duration::from_millis(1500);
 
@@ -321,13 +321,14 @@ mod tests {
             c.fetch_add(1, Ordering::SeqCst);
         });
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             paced_fn();
         });
 
         pacer.stop();
         thread::sleep(keep_main_thread_alive_sleep_for);
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+        let _ = handle.join(); // Cleanup after assert so test is not marked as leaky.
     }
 
     #[test]

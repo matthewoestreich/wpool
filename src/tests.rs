@@ -171,6 +171,7 @@ fn test_overflow() {
 #[test]
 fn test_basic() {
     let p = WPool::new(3);
+    p.wait_ready();
 
     for _ in 0..3 {
         p.submit(|| {
@@ -375,7 +376,7 @@ fn test_job_actually_ran() {
 }
 
 #[test]
-fn test_multiple_pause_resume_resets_resume_channel() {
+fn test_pause_resume_resets_resume_channel() {
     // If the 'shutdown lock (which acts as a pause/unpause signal)' is not
     // reset after resume is called, then the next time pause is called,
     // try to recv on that channel will error and workers will not block
@@ -417,7 +418,7 @@ fn test_multiple_pause_resume_resets_resume_channel() {
 }
 
 #[test]
-fn test_pause_resume_resets_resume_channel() {
+fn test_multiple_pause_resume_resets_resume_channel() {
     // If the 'shutdown lock (which acts as a pause/unpause signal)' is not
     // reset after resume is called, then the next time pause is called,
     // try to recv on that channel will error and workers will not block
@@ -461,9 +462,8 @@ fn test_pause_resume_resets_resume_channel() {
     wp.pause();
     let elapsed = start.elapsed();
 
-    // This is the critical assertion:
-    // - If 'shutdown_lock' was NOT reset, pause will return immediately (~0ms)
-    // - If 'shutdown_lock' WAS reset, pause will block ~50ms
+    // This is the critical assertion. If 'shutdown lock' was not reset after prev cycle
+    // then workers will not block until everyone is paused, they will fall thru immediately.
     if elapsed < Duration::from_millis(20) {
         panic!("pause returned immediately — resume channel was not reset!");
     }
@@ -508,6 +508,29 @@ fn test_example_get_results_from_task() {
     };
 
     wp.stop_wait();
+}
+
+#[test]
+fn test_min_workers() {
+    let max_workers = 4;
+    let min_workers = 2;
+    let wp = WPool::new_with_min(max_workers, min_workers);
+    for _ in 0..max_workers {
+        wp.submit(move || {
+            thread::sleep(Duration::from_micros(1));
+        });
+    }
+    // Make sure max_workers amount of timeout time has passed.
+    let sleep_for = ((max_workers + max_workers) as u32) * WORKER_IDLE_TIMEOUT;
+    thread::sleep(sleep_for);
+    // Should only have 'min_workers' alive
+    assert_eq!(
+        min_workers,
+        wp.worker_count(),
+        "expected {min_workers} to be alive, got {}",
+        wp.worker_count()
+    );
+    wp.stop_wait(); // No leaks
 }
 
 #[test]

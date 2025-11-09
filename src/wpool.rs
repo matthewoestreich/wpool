@@ -1,7 +1,7 @@
 use std::{
     sync::{
         Arc, Mutex, Once,
-        atomic::{AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
         mpsc::{self, RecvTimeoutError, TryRecvError},
     },
     thread,
@@ -21,6 +21,7 @@ pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 /// so you can enqueue any number of tasks without waiting.
 pub struct WPool {
     dispatch_handle: Mutex<Option<thread::JoinHandle<()>>>,
+    dispatch_ready: Arc<AtomicBool>,
     max_workers: usize,
     min_workers: usize,
     shutdown_lock: Mutex<Channel<()>>,
@@ -40,6 +41,7 @@ impl WPool {
         let waiting_queue = ThreadedDeque::new();
         let worker_channel = bounded(0);
         let task_channel = unbounded();
+        let dispatch_ready = Arc::new(AtomicBool::new(false));
 
         let min_workers = if min_workers > max_workers {
             max_workers
@@ -54,12 +56,13 @@ impl WPool {
             Arc::clone(&worker_count),
             waiting_queue.clone(),
             task_channel.clone_receiver(),
-            worker_channel.clone_sender(),
-            worker_channel.clone_receiver(),
+            worker_channel.clone(),
+            Arc::clone(&dispatch_ready),
         );
 
         Self {
             dispatch_handle: Mutex::new(Some(dispatch_handle)),
+            dispatch_ready,
             max_workers,
             min_workers,
             shutdown_lock: Mutex::new(unbounded()),
@@ -219,6 +222,15 @@ impl WPool {
         self.set_status(WPoolStatus::Running);
     }
 
+    /// Waits for the dispatcher to acknowledge it has been spun up and started.
+    /// Flag that is set by dispatcher after the dispatcher thread is started but
+    /// just prior to entering the main dispatcher loop.
+    pub fn wait_ready(&self) {
+        while !self.dispatch_ready.load(Ordering::SeqCst) {
+            thread::yield_now();
+        }
+    }
+
     /************************* Crate methods *****************************************/
 
     pub(crate) fn _waiting_queue_len(&self) -> usize {
@@ -237,18 +249,24 @@ impl WPool {
         worker_count: Arc<AtomicUsize>,
         waiting_queue: ThreadedDeque<Signal>,
         task_receiver: Receiver<Signal>,
-        worker_sender: Sender<Signal>,
-        worker_receiver: Receiver<Signal>,
+        worker_channel: Channel<Signal>,
+        is_ready: Arc<AtomicBool>,
     ) -> thread::JoinHandle<()> {
         thread::spawn(move || {
             let mut is_idle = false;
             let wait_group = WaitGroup::new();
 
+            // Just before starting loop, set ready flag.
+            is_ready.store(true, Ordering::SeqCst);
+
             loop {
                 // See `process_waiting_queue` comments for more info.
                 if !waiting_queue.is_empty() {
-                    if !Self::process_waiting_queue(&waiting_queue, &task_receiver, &worker_sender)
-                    {
+                    if !Self::process_waiting_queue(
+                        &waiting_queue,
+                        &task_receiver,
+                        worker_channel.sender_ref(),
+                    ) {
                         break;
                     }
                     continue;
@@ -258,10 +276,9 @@ impl WPool {
                 let signal = match task_receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
                     Ok(signal) => signal,
                     Err(RecvTimeoutError::Timeout) => {
-                        // Keep `min_workers` alive.
                         if is_idle
                             && worker_count.load(Ordering::SeqCst) > min_workers
-                            && worker_sender.try_send(Signal::Terminate).is_ok()
+                            && worker_channel.try_send(Signal::Terminate).is_ok()
                         {
                             worker_count.fetch_sub(1, Ordering::SeqCst);
                         }
@@ -276,7 +293,7 @@ impl WPool {
                     waiting_queue.push_back(signal);
                 } else {
                     wait_group.add(1);
-                    Self::spawn_worker(signal, wait_group.clone(), worker_receiver.clone());
+                    Self::spawn_worker(signal, wait_group.clone(), worker_channel.clone_receiver());
                     worker_count.fetch_add(1, Ordering::SeqCst);
                 }
 
@@ -285,12 +302,12 @@ impl WPool {
 
             // If `stop_wait()` was called run tasks and waiting queue.
             if WPoolStatus::from_u8(status.load(Ordering::SeqCst)) == WPoolStatus::Stopped(true) {
-                Self::run_queued_tasks(&waiting_queue, &worker_sender);
+                Self::run_queued_tasks(&waiting_queue, worker_channel.sender_ref());
             }
 
             // Terminate workers as they become available.
             for _ in 0..worker_count.load(Ordering::SeqCst) {
-                let _ = worker_sender.send(Signal::Terminate);
+                let _ = worker_channel.send(Signal::Terminate);
                 worker_count.fetch_sub(1, Ordering::SeqCst);
             }
 

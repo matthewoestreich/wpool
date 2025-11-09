@@ -74,8 +74,16 @@ impl<T> Sender<T> {
                     Err(TrySendError::Disconnected(msg))
                 }
             }
-            Sender::Unbounded(_) => {
-                panic!("Need to fix this, but unbound Sender does not have a try_send method!");
+            Sender::Unbounded(tx) => {
+                if let Some(inner) = safe_lock(tx).as_ref() {
+                    let result = inner.send(msg);
+                    match result {
+                        Ok(_) => Ok(()),
+                        Err(SendError(msg)) => Err(TrySendError::Disconnected(msg)),
+                    }
+                } else {
+                    Err(TrySendError::Disconnected(msg))
+                }
             }
         }
     }
@@ -206,10 +214,29 @@ impl<T> Clone for Channel<T> {
 }
 
 impl<T> Channel<T> {
+    /// Returns a reference to the `Sender<T>`
+    pub(crate) fn sender_ref(&self) -> &Sender<T> {
+        match &self.kind {
+            ChannelKind::Bounded { sender, .. } => sender,
+            ChannelKind::Unbounded { sender, .. } => sender,
+        }
+    }
+
     pub(crate) fn send(&self, msg: T) -> Result<(), SendError<T>> {
         match &self.kind {
             ChannelKind::Unbounded { sender, .. } => sender.send(msg),
             ChannelKind::Bounded { sender, .. } => sender.send(msg),
+        }
+    }
+
+    /// # IMPORTANT: DO NOT EXPECT NON-BLOCKING BEHAVIOR ON `unbounded` CHANNELS!
+    /// ## When called on an `unbounded` channel, `try_send` behaves EXACTLY like calling `send`!
+    /// For `unbounded` channels only, we call `send` under the hood.
+    /// You can expect non-blocking behavior if you're calling `try_send` on a `bounded` channel.
+    pub(crate) fn try_send(&self, msg: T) -> Result<(), TrySendError<T>> {
+        match &self.kind {
+            ChannelKind::Bounded { sender, .. } => sender.try_send(msg),
+            ChannelKind::Unbounded { sender, .. } => sender.try_send(msg),
         }
     }
 
