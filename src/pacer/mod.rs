@@ -4,9 +4,11 @@
 //! concurrent threads is OK, as long as their execution does not start at the
 //! same time.
 //!
-//! Calling `stop()` will wait or any functions that are currently executing
-//! to finish executing before the `Pacer` instance is "abandoned" (a `Pacer`
-//! instance is not reusable).
+//! # Important!
+//!
+//! Calling `stop()` **does NOT wait for executing functions to finish**! Any
+//! function(s) that are executing when `stop()` is called will be abandoned
+//! if the main thread ends prior to the function(s) completion.
 //!
 //! # Examples
 //!
@@ -73,7 +75,6 @@
 //!     pacer.next();
 //!     counter.fetch_add(1, Ordering::SeqCst);
 //! }
-//!
 //!
 //! // Or if you don't want to pass in a `Pacer`
 //! // instance to your non `PacedFn`:
@@ -166,7 +167,9 @@ impl Pacer {
         let _ = self.gate.send(());
     }
 
-    /// Stops the Pacer from running. Waits for all tasks to complete before stopping.
+    /// Stops the Pacer from running. Calling `stop()` **does NOT wait for executing
+    /// functions to finish**! Any function(s) that are executing when `stop()` is
+    /// called will be abandoned if the main thread ends prior to the function(s) completion.
     /// A `Pacer` instance is not reusable, so consider any given pacer instance to be
     /// abandoned after `stop()` has been called on it.
     pub fn stop(&self) {
@@ -285,20 +288,45 @@ mod tests {
     }
 
     #[test]
-    fn test_stop_before_fns_finish() {
+    #[should_panic]
+    fn test_stop_before_fns_finish_panics() {
         let pacer = Pacer::new(Duration::from_millis(100));
         let counter = Arc::new(AtomicUsize::new(0));
 
         let c = Arc::clone(&counter);
         let paced_fn = pacer.pace(move || {
-            thread::sleep(Duration::from_secs(1));
+            thread::sleep(Duration::from_secs(2));
             c.fetch_add(1, Ordering::SeqCst);
         });
 
-        paced_fn();
+        thread::spawn(move || {
+            paced_fn();
+        });
 
         pacer.stop();
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
 
+    #[test]
+    fn test_stop_before_fns_finish_does_not_panic_while_main_thread_alive() {
+        let pacer = Pacer::new(Duration::from_millis(100));
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        let paced_fn_sleep_dur = Duration::from_millis(1000);
+        let keep_main_thread_alive_sleep_for = Duration::from_millis(1500);
+
+        let c = Arc::clone(&counter);
+        let paced_fn = pacer.pace(move || {
+            thread::sleep(paced_fn_sleep_dur);
+            c.fetch_add(1, Ordering::SeqCst);
+        });
+
+        thread::spawn(move || {
+            paced_fn();
+        });
+
+        pacer.stop();
+        thread::sleep(keep_main_thread_alive_sleep_for);
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
