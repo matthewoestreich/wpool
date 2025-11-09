@@ -337,10 +337,7 @@ impl WPool {
                 waiting_queue.push_back(signal);
             }
             Err(TryRecvError::Empty) => {
-                // Get a **reference** to the element at the front of
-                // waiting queue, if exists. Lock the entire shared
-                // deque while checking, and then popping from it.
-                // Otherwise we have a race.
+                // To prevent a race, lock deque while checking front + popping front.
                 let mut wq = waiting_queue.lock();
                 if let Some(signal) = wq.front()
                     && let Ok(_) = worker_sender.try_send(signal.clone())
