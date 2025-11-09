@@ -72,7 +72,7 @@ wp.submit(move || {
     //
 
     if let Err(e) = tx_clone.send(result_from_doing_work) {
-        println!("error sending results to main thread from worker! : Error={e:?}");
+        panic!("error sending results to main thread from worker! : Error={e:?}");
     }
     println!("success! sent results from worker to main!");
 });
@@ -83,18 +83,15 @@ wp.submit(move || {
 // as our channel can act as a pseudo pauser)
 //
 // If we were using an unbounded channel, we may want
-// to use pause in order to wait
-// for the result of any running task (like if we need
-// to use the result elsewhere).
+// to use pause in order to wait for the result of any
+// running task (like if we need to use the result elsewhere).
 //
 // wp.pause();
 
 match rx.recv() {
-    Ok(result) => assert_eq!(result, 69),
-    Err(_) => {
-        panic!("expected this not to fail and let us receive results from worker via channel.")
-    }
-};
+    Ok(result) => assert_eq!(result, 69, "expected 69 got {result}"),
+    Err(e) => panic!("unexpected channel error! : Error={e:?}"),
+}
 
 wp.stop_wait();
 ```

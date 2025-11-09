@@ -237,8 +237,7 @@ mod tests {
         let pacer = Pacer::new(delay_1);
         let pacer_slow = Pacer::new(delay_2);
 
-        let tasks_done = WaitGroup::new();
-        tasks_done.add(20);
+        let tasks_done = WaitGroup::new_with_delta(20);
 
         let start = Instant::now();
 

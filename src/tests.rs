@@ -133,8 +133,7 @@ fn test_overflow() {
     let num_jobs = 64;
     let expected_len = 62;
     let release_chan = unbounded::<()>();
-    let wait_group = WaitGroup::new();
-    wait_group.add(max_workers);
+    let wait_group = WaitGroup::new_with_delta(max_workers);
     let is_ready = wait_group.clone();
     let p = WPool::new(max_workers);
     // Start workers, and have them all wait on a channel before completing.
@@ -260,8 +259,7 @@ fn test_stop_abandoned_waiting_queue() {
         let max_workers = 10;
         let num_jobs = 20;
         let releaser_chan = unbounded::<()>();
-        let work_ready = WaitGroup::new();
-        work_ready.add(max_workers);
+        let work_ready = WaitGroup::new_with_delta(max_workers);
 
         let wp = WPool::new(max_workers);
 
@@ -309,8 +307,7 @@ fn test_stop_wait_does_not_abandoned_waiting_queue() {
         let max_workers = 10;
         let num_jobs = 20;
         let releaser_chan = unbounded::<()>();
-        let work_ready = WaitGroup::new();
-        work_ready.add(max_workers);
+        let work_ready = WaitGroup::new_with_delta(max_workers);
 
         let wp = WPool::new(max_workers);
 
@@ -370,6 +367,7 @@ fn test_pause_basic() {
 #[test]
 fn test_job_actually_ran() {
     let p = WPool::new(3);
+    p.wait_ready();
     let counter = Arc::new(AtomicUsize::new(0));
     let counter_clone = counter.clone();
 
@@ -494,7 +492,7 @@ fn test_example_get_results_from_task() {
 
         let result_from_task = 69;
         if let Err(e) = tx_clone.send(result_from_task) {
-            println!("error sending results to main thread from worker! : Error={e:?}");
+            panic!("error sending results to main thread from worker! : Error={e:?}");
         }
         println!("success! sent results from worker to main!");
     });
@@ -507,11 +505,9 @@ fn test_example_get_results_from_task() {
     // wp.pause();
 
     match rx.recv() {
-        Ok(result) => assert_eq!(result, 69),
-        Err(_) => {
-            panic!("expected this not to fail and let us receive results from worker via channel.")
-        }
-    };
+        Ok(result) => assert_eq!(result, 69, "expected 69 got {result}"),
+        Err(e) => panic!("unexpected channel error : {e:?}"),
+    }
 
     wp.stop_wait();
 }
@@ -808,8 +804,7 @@ fn test_wait_queue_len_race_2() {
 
     let releaser_og = unbounded::<()>();
     let releaser = releaser_og.clone_receiver();
-    let submitter_ready_og = WaitGroup::new();
-    submitter_ready_og.add(num_threads * num_jobs);
+    let submitter_ready_og = WaitGroup::new_with_delta(num_threads * num_jobs);
     let submitter_ready = submitter_ready_og.clone();
 
     let spawner_thread = thread::spawn(move || {
@@ -923,8 +918,7 @@ fn test_stop_race() {
     run_test_n_times(500, 0, false, || {
         let max_workers = 20;
         let work_release_chan = unbounded::<()>();
-        let started = WaitGroup::new();
-        started.add(max_workers);
+        let started = WaitGroup::new_with_delta(max_workers);
 
         let wp = Arc::new(WPool::new(max_workers));
 
@@ -1183,8 +1177,7 @@ fn test_min_workers_greater_than_max_workers() {
 fn test_wait_group_done_wait_race() {
     // Ensure there is not a race when calling done() before wait()
     run_test_with_timeout(Duration::from_secs(5), || {
-        let wg = WaitGroup::new();
-        wg.add(1);
+        let wg = WaitGroup::new_with_delta(1);
         thread::spawn({
             let wg = wg.clone();
             move || {
@@ -1200,8 +1193,7 @@ fn test_wait_group_done_wait_race() {
     println!("\n-----------------------------------\n");
 
     run_test_with_timeout(Duration::from_secs(5), || {
-        let wg = WaitGroup::new();
-        wg.add(1);
+        let wg = WaitGroup::new_with_delta(1);
         wg.done();
         wg.wait();
     });

@@ -70,10 +70,9 @@
 //!     //
 //!
 //!     if let Err(e) = tx_clone.send(result_from_doing_work) {
-//!         println!("error sending results to main thread from worker! : Error={e:?}");
-//!     } else {
-//!         println!("success! sent results from worker to main!");
+//!         panic!("error sending results to main thread from worker! : Error={e:?}");
 //!     }
+//!     println!("success! sent results from worker to main!");
 //! });
 //!
 //! // Pause until we get our result. This is not necessary in this case, as
@@ -84,11 +83,9 @@
 //! // wp.pause();
 //!
 //! match rx.recv() {
-//!     Ok(result) => assert_eq!(result, 69),
-//!     Err(_) => {
-//!         panic!("expected this not to fail and let us receive results from worker via channel.")
-//!     }
-//! };
+//!     Ok(result) => assert_eq!(result, 69, "expected 69 got {result}"),
+//!     Err(e) => panic!("unexpected channel error : {e:?}"),
+//! }
 //!
 //! wp.stop_wait();
 //! ```
@@ -238,6 +235,22 @@ impl WaitGroup {
         Self {
             inner: Arc::new(WaitGroupInner {
                 count: AtomicUsize::new(0),
+                cvar: Condvar::new(),
+                lock: Mutex::new(()),
+            }),
+        }
+    }
+
+    /// ## Combines `new()` and `.add(delta)` into a single call.
+    /// ### Equivalent to:
+    /// ```rust
+    /// let wg = WaitGroup::new();
+    /// wg.add(delta);
+    /// ```
+    pub(crate) fn new_with_delta(delta: usize) -> Self {
+        Self {
+            inner: Arc::new(WaitGroupInner {
+                count: AtomicUsize::new(delta),
                 cvar: Condvar::new(),
                 lock: Mutex::new(()),
             }),
