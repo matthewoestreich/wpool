@@ -102,14 +102,51 @@ pub use wpool::WPool;
 use std::{
     collections::VecDeque,
     fmt::{self, Display, Formatter},
+    panic::PanicHookInfo,
     sync::{
         Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicUsize, Ordering},
     },
-    thread,
+    thread::{self, ThreadId},
 };
 
 use crate::channel::Receiver;
+
+/************************************* [PUBLIC] PanicInfo ********************************/
+
+/// `PanicInfo` displays panic information.
+#[derive(Clone, Debug)]
+pub struct PanicInfo {
+    #[allow(dead_code)]
+    thread_id: ThreadId,
+    payload: Option<String>,
+    file: Option<String>,
+    line: Option<u32>,
+    column: Option<u32>,
+}
+
+impl From<&PanicHookInfo<'_>> for PanicInfo {
+    fn from(info: &PanicHookInfo) -> Self {
+        let mut this = Self {
+            thread_id: thread::current().id(),
+            payload: None,
+            file: None,
+            line: None,
+            column: None,
+        };
+
+        if let Some(location) = info.location() {
+            this.file = Some(location.file().to_string());
+            this.line = Some(location.line());
+            this.column = Some(location.column());
+        }
+
+        this.payload = info.payload_as_str().map(|s| s.to_string());
+        this
+    }
+}
+
+/************************************* safe_lock *****************************************/
 
 // One-liner that allows us to easily lock a Mutex while handling possible poison.
 pub(crate) fn safe_lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -196,7 +233,7 @@ impl Display for WPoolStatus {
     }
 }
 
-impl std::fmt::Debug for WPoolStatus {
+impl fmt::Debug for WPoolStatus {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         Display::fmt(self, f)
     }
@@ -219,7 +256,7 @@ impl Display for Signal {
     }
 }
 
-impl std::fmt::Debug for Signal {
+impl fmt::Debug for Signal {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         Display::fmt(self, f)
     }
@@ -231,6 +268,14 @@ pub(crate) type TaskFn = Box<dyn FnOnce() + Send + 'static>;
 
 pub(crate) struct Task {
     inner: Arc<dyn Fn() + Send + Sync + 'static>,
+}
+
+impl Clone for Task {
+    fn clone(&self) -> Self {
+        Task {
+            inner: Arc::clone(&self.inner),
+        }
+    }
 }
 
 impl Task {
@@ -253,14 +298,6 @@ impl Task {
 
     pub fn run(&self) {
         (self.inner)();
-    }
-}
-
-impl Clone for Task {
-    fn clone(&self) -> Self {
-        Task {
-            inner: Arc::clone(&self.inner),
-        }
     }
 }
 
@@ -304,11 +341,13 @@ impl WaitGroup {
         }
     }
 
+    #[inline]
     pub(crate) fn add(&self, delta: usize) {
         let _guard = safe_lock(&self.inner.lock);
         self.inner.count.fetch_add(delta, Ordering::SeqCst);
     }
 
+    #[inline]
     pub(crate) fn done(&self) {
         let _guard = safe_lock(&self.inner.lock);
         if self.inner.count.fetch_sub(1, Ordering::SeqCst) == 1 {
@@ -316,6 +355,7 @@ impl WaitGroup {
         }
     }
 
+    #[inline]
     pub(crate) fn wait(&self) {
         let mut guard = safe_lock(&self.inner.lock);
         while self.inner.count.load(Ordering::SeqCst) > 0 {

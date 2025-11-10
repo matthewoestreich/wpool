@@ -136,6 +136,21 @@ fn test_basic() {
 }
 
 #[test]
+fn test_wait_ready() {
+    let max_workers = 4;
+    let wp = WPool::new(max_workers);
+    wp.wait_ready();
+    for _ in 0..max_workers {
+        wp.submit(|| {
+            thread::sleep(Duration::from_millis(2));
+        });
+        // Does this cause anything?
+        wp.wait_ready();
+    }
+    wp.stop_wait();
+}
+
+#[test]
 fn test_min_workers_basic() {
     let max_workers = 2;
     let min_workers = 1;
@@ -226,6 +241,20 @@ fn test_thread_guardian_multiple_panics_in_worker() {
 }
 
 #[test]
+fn test_view_worker_panics() {
+    let wp = WPool::new(2);
+
+    wp.submit(move || {
+        panic!("one");
+    });
+
+    wp.stop_wait();
+    let p = wp.view_worker_panics();
+    println!("{p:?}");
+    assert_eq!(p.len(), 1);
+}
+
+#[test]
 fn test_thread_guardian_multiple_panics_in_worker_using_min_workers() {
     let max_workers = 4;
     let min_workers = 2;
@@ -298,6 +327,7 @@ fn test_thread_guardian_multiple_panics_in_worker_using_min_workers() {
 
     // Cleanup so no leaks.
     wp.stop_wait();
+    println!("{:#?}", wp.view_worker_panics());
 }
 
 #[test]

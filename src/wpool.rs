@@ -1,4 +1,5 @@
 use std::{
+    panic::{self},
     sync::{
         Arc, Mutex, Once,
         atomic::{AtomicU8, AtomicUsize, Ordering},
@@ -9,7 +10,7 @@ use std::{
 };
 
 use crate::{
-    Signal, Task, ThreadGuardian, ThreadedDeque, WPoolStatus, WaitGroup,
+    PanicInfo, Signal, Task, ThreadGuardian, ThreadedDeque, WPoolStatus, WaitGroup,
     channel::{Channel, Receiver, Sender, bounded, unbounded},
     safe_lock,
 };
@@ -24,6 +25,7 @@ pub struct WPool {
     is_dispatch_ready: WaitGroup,
     max_workers: usize,
     min_workers: usize,
+    panics: Arc<Mutex<Vec<PanicInfo>>>,
     shutdown_lock: Mutex<Channel<()>>,
     status: Arc<AtomicU8>,
     stop_once: Once,
@@ -36,6 +38,7 @@ pub struct WPool {
 impl WPool {
     // Private "quality-of-life" helper. Makes it so we don't have to update struct fields in multiple places.
     fn new_base(max_workers: usize, min_workers: usize) -> Self {
+        let panics = Arc::new(Mutex::new(Vec::new()));
         let status = Arc::new(AtomicU8::new(WPoolStatus::Running.as_u8()));
         let worker_count = Arc::new(AtomicUsize::new(0));
         let waiting_queue = ThreadedDeque::new();
@@ -48,6 +51,12 @@ impl WPool {
         } else {
             min_workers
         };
+
+        // Hook all panics.
+        let panics_clone = Arc::clone(&panics);
+        panic::set_hook(Box::new(move |info| {
+            safe_lock(&panics_clone).push(PanicInfo::from(info));
+        }));
 
         let dispatch_handle = Self::dispatch(
             max_workers,
@@ -65,6 +74,7 @@ impl WPool {
             is_dispatch_ready,
             max_workers,
             min_workers,
+            panics,
             shutdown_lock: Mutex::new(unbounded()),
             status,
             stop_once: Once::new(),
@@ -226,6 +236,11 @@ impl WPool {
         self.is_dispatch_ready.wait()
     }
 
+    /// Returns all PanicInfo for workers that have panicked.
+    pub fn view_worker_panics(&self) -> Vec<PanicInfo> {
+        safe_lock(&self.panics).to_vec()
+    }
+
     /************************* Crate methods *****************************************/
 
     pub(crate) fn _waiting_queue_len(&self) -> usize {
@@ -368,7 +383,6 @@ impl WPool {
             );
 
             let mut signal_maybe = Some(signal);
-
             while signal_maybe.is_some() {
                 match signal_maybe.take().expect("is_some()") {
                     Signal::NewTask(task) => task.run(),
@@ -394,6 +408,7 @@ impl WPool {
             // Close tasks channel.
             self.task_sender.drop();
         });
+
         if let Some(handle) = safe_lock(&self.dispatch_handle).take() {
             let _ = handle.join();
         }
