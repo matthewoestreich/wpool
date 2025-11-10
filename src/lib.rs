@@ -344,7 +344,8 @@ impl fmt::Debug for WPoolStatus {
 pub(crate) enum Signal {
     NewTask(Task),
     // Blocks until the task is either assigned to a worker or queued.
-    NewTaskWithConfirmation(Task, mpsc::SyncSender<()>),
+    // Drop the sender to "confirm".
+    NewTaskWithConfirmation(Task, Option<mpsc::SyncSender<()>>),
     Terminate,
 }
 

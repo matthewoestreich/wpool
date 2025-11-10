@@ -287,7 +287,7 @@ impl WPool {
     {
         let (tx, rx) = mpsc::sync_channel(0);
         let t = Task::new(Box::new(task));
-        let s = Signal::NewTaskWithConfirmation(t, tx);
+        let s = Signal::NewTaskWithConfirmation(t, Some(tx));
         self.submit_signal(s);
         let _ = rx.recv();
     }
@@ -519,6 +519,40 @@ impl WPool {
 
     /************************* Private methods ***************************************/
 
+    fn shutdown(&self, wait: bool) {
+        self.stop_once.call_once(|| {
+            self.resume();
+            // Acquire lock so we can wait for any in-progress pauses.
+            let shutdown_lock = safe_lock(&self.shutdown_lock);
+            self.set_status(WPoolStatus::Stopped(wait));
+            drop(shutdown_lock);
+            // Close tasks channel.
+            self.task_sender.drop();
+        });
+
+        if let Some(handle) = safe_lock(&self.dispatch_handle).take() {
+            let _ = handle.join();
+        }
+    }
+
+    /// Submit a Signal to the task channel.
+    fn submit_signal(&self, signal: Signal) {
+        if matches!(self.status(), WPoolStatus::Stopped(_)) {
+            return;
+        }
+        let _ = self.task_sender.send(signal);
+    }
+
+    fn status(&self) -> WPoolStatus {
+        WPoolStatus::from_u8(self.status.load(Ordering::Acquire))
+    }
+
+    fn set_status(&self, status: WPoolStatus) {
+        self.status.store(status.as_u8(), Ordering::SeqCst);
+    }
+
+    /************************* Private Static methods ********************************/
+
     /// `dispatch` starts our dispatcher thread. It is responsible for receiving
     /// tasks, dispatching tasks to workers, spawning workers, killing workers
     /// during pool shutdown, and more.
@@ -573,11 +607,7 @@ impl WPool {
 
                 // Got a signal. Process it by placing in wait queue or handing to worker.
                 if worker_count.load(Ordering::SeqCst) >= max_workers {
-                    // If `submit_confirm(...)` was called send confirmation and wrap the task in a plain NewTask.
-                    if let Signal::NewTaskWithConfirmation(task, confirm) = signal {
-                        drop(confirm);
-                        signal = Signal::NewTask(task);
-                    }
+                    Self::confirm_signal_if_needed(&mut signal);
                     waiting_queue.push_back(signal);
                     waiting_queue_len.store(waiting_queue.len(), Ordering::SeqCst);
                 } else {
@@ -692,35 +722,12 @@ impl WPool {
         });
     }
 
-    fn shutdown(&self, wait: bool) {
-        self.stop_once.call_once(|| {
-            self.resume();
-            // Acquire lock so we can wait for any in-progress pauses.
-            let shutdown_lock = safe_lock(&self.shutdown_lock);
-            self.set_status(WPoolStatus::Stopped(wait));
-            drop(shutdown_lock);
-            // Close tasks channel.
-            self.task_sender.drop();
-        });
-
-        if let Some(handle) = safe_lock(&self.dispatch_handle).take() {
-            let _ = handle.join();
+    /// If `submit_confirm(...)` was called send confirmation, extract the task,
+    /// and wrap the extracted task in a plain NewTask.
+    fn confirm_signal_if_needed(signal: &mut Signal) {
+        if let Signal::NewTaskWithConfirmation(task, confirm) = signal {
+            drop(confirm.take());
+            *signal = Signal::NewTask(task.to_owned());
         }
-    }
-
-    /// Submit a Signal to the task channel.
-    fn submit_signal(&self, signal: Signal) {
-        if matches!(self.status(), WPoolStatus::Stopped(_)) {
-            return;
-        }
-        let _ = self.task_sender.send(signal);
-    }
-
-    fn status(&self) -> WPoolStatus {
-        WPoolStatus::from_u8(self.status.load(Ordering::Acquire))
-    }
-
-    fn set_status(&self, status: WPoolStatus) {
-        self.status.store(status.as_u8(), Ordering::SeqCst);
     }
 }
