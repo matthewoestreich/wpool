@@ -243,7 +243,7 @@ use std::{
     fmt::{self, Display, Formatter},
     panic::PanicHookInfo,
     sync::{
-        Arc, Condvar, Mutex, MutexGuard,
+        Arc, Condvar, Mutex, MutexGuard, Once,
         atomic::{AtomicUsize, Ordering},
         mpsc,
     },
@@ -551,35 +551,42 @@ impl WaitGroup {
 /// ```
 pub(crate) struct ThreadGuardian<T>
 where
-    T: Clone + Send + 'static,
+    T: Send + 'static,
 {
-    args: T,
+    once: Once,
+    args: Mutex<Option<T>>,
     run_on_panic_fn: Mutex<Option<Box<dyn FnOnce() + Send + 'static>>>,
 }
 
 impl<T> ThreadGuardian<T>
 where
-    T: Clone + Send + 'static,
+    T: Send + 'static,
 {
     pub(crate) fn new(args: T) -> Self {
         Self {
-            args,
+            once: Once::new(),
+            args: Mutex::new(Some(args)),
             run_on_panic_fn: Mutex::new(None),
         }
     }
 
+    /// Can only be called one time per instance.
     pub(crate) fn on_panic<F>(&self, handler: F)
     where
         F: FnOnce(T) + Send + 'static,
     {
-        let args = self.args.clone();
-        *safe_lock(&self.run_on_panic_fn) = Some(Box::new(move || handler(args)));
+        self.once.call_once(|| {
+            let args = safe_lock(&self.args)
+                .take()
+                .expect("on_panic to be called once");
+            *safe_lock(&self.run_on_panic_fn) = Some(Box::new(move || handler(args)));
+        });
     }
 }
 
 impl<T> Drop for ThreadGuardian<T>
 where
-    T: Clone + Send + 'static,
+    T: Send + 'static,
 {
     fn drop(&mut self) {
         if thread::panicking()
