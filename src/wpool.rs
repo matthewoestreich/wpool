@@ -44,7 +44,7 @@ impl WPool {
             "[WPool] `max_workers` must be greater than 0!"
         );
         assert!(
-            max_workers < min_workers,
+            max_workers >= min_workers,
             "[WPool] `max_workers` must be greater than or equal to `min_workers`!"
         );
 
