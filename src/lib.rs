@@ -475,10 +475,8 @@ impl WaitGroup {
 
 /************************************* ThreadGuardian ************************************/
 
-/// ThreadGuardian sits in a thread to detect a panic within said thread.
-/// We use `impl Drop` to detect if `thread::panicking()` is true.
-/// If a panic has been detected, the ThreadGuardian instance will call the provided
-/// `on_panic` handler.
+/// `ThreadGuardian` allows registering a one-time panic handler that consumes `args`.
+/// `on_panic` can only be called once. The handler will run if the thread panics.
 ///
 /// You can pass any args you want to ThreadGuardian during instantiation, just wrap them
 /// in a tuple and you will have access to them in the `on_panic` method.
@@ -520,6 +518,9 @@ impl WaitGroup {
 ///             // Handle thread panic:
 ///             println!("{foo:?} {bar:?} {baz:?}");
 ///         });
+///
+///         // If this thread panicked, `tg.on_panic` would be called.
+///         /* panic!("uh-oh!"); */
 ///     });
 /// }
 /// ```
