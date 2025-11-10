@@ -13,18 +13,13 @@ jobs:
           toolchain: stable
           override: true
 
-      - uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.cargo/bin
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
       - name: Install cargo-nextest
-        run: cargo install cargo-nextest --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
 
-      - name: Run tests
+      - name: Run lib tests
         run: cargo nextest run --lib --verbose
+
+      - name: Run doc tests
+        run: cargo test --doc
