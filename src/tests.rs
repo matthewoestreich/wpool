@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::{
-    ThreadedDeque, WaitGroup,
+    WaitGroup,
     channel::{bounded, unbounded},
     safe_lock,
     wpool::{WORKER_IDLE_TIMEOUT, WPool},
@@ -174,6 +174,108 @@ fn test_min_workers_basic() {
 }
 
 #[test]
+fn test_worker_count_example_in_docs() {
+    let max_workers = 5;
+    let wp = WPool::new(max_workers);
+
+    // Should have 0 workers here.
+    assert_eq!(wp.worker_count(), 0);
+
+    for _ in 0..max_workers {
+        wp.submit(move || {
+            thread::sleep(Duration::from_secs(1));
+        });
+    }
+
+    // Give some time for worker to spawn.
+    thread::sleep(Duration::from_millis(5));
+
+    // Should have `max_workers` amount of workers.
+    assert_eq!(wp.worker_count(), max_workers);
+
+    wp.stop_wait();
+
+    // Should have 0 workers now.
+    assert_eq!(wp.worker_count(), 0);
+}
+
+#[test]
+fn test_submit_confirm() {
+    let max_workers = 5;
+    let wp = WPool::new(max_workers);
+
+    for i in 1..=max_workers {
+        // Block until our task has been given to a worker or queued (not executed).
+        wp.submit_confirm(move || {
+            thread::sleep(Duration::from_secs(1));
+        });
+        // Since we waited for our job to be given to a worker or queued,
+        // the worker_count should now reflect that.
+        assert_eq!(wp.worker_count(), i);
+    }
+
+    // Should have `max_workers` amount of workers.
+    assert_eq!(wp.worker_count(), max_workers);
+
+    wp.stop_wait();
+    // Should have 0 workers now.
+    assert_eq!(wp.worker_count(), 0);
+}
+
+#[test]
+fn test_panic_panic_example_in_readme() {
+    let wp = WPool::new(3);
+    wp.submit(|| panic!("something went wrong!"));
+    // Wait for currently running jobs to finish.
+    wp.pause();
+    println!("{:#?}", wp.get_workers_panic_info());
+    // [
+    //     PanicInfo {
+    //         thread_id: ThreadId(
+    //             4,
+    //         ),
+    //         payload: Some(
+    //             "something went wrong!",
+    //         ),
+    //         file: Some(
+    //             "src/tests.rs",
+    //         ),
+    //         line: Some(
+    //             179,
+    //         ),
+    //         column: Some(
+    //             18,
+    //         ),
+    //     },
+    // ]
+    wp.stop_wait();
+}
+
+#[test]
+fn test_capture_example_in_readme() {
+    #[derive(Clone, Debug)]
+    struct Foo {
+        foo: u8,
+    }
+
+    let wp = WPool::new(3);
+    let my_foo = Foo { foo: 1 };
+
+    // You can either clone before capturing:
+    let my_foo_clone = my_foo.clone();
+    wp.submit(move || {
+        println!("{my_foo_clone:?}");
+    });
+
+    // Or allow the closure to consume (eg. move ownership):
+    wp.submit(move || {
+        println!("{my_foo:?}");
+    });
+
+    wp.stop_wait();
+}
+
+#[test]
 fn test_thread_guardian_panic_in_worker() {
     run_test_with_timeout(Duration::from_secs(2), || {
         let max_workers = 2;
@@ -241,7 +343,7 @@ fn test_thread_guardian_multiple_panics_in_worker() {
 }
 
 #[test]
-fn test_view_worker_panics() {
+fn test_get_workers_panic_info() {
     let wp = WPool::new(2);
 
     wp.submit(move || {
@@ -249,7 +351,7 @@ fn test_view_worker_panics() {
     });
 
     wp.stop_wait();
-    let p = wp.view_worker_panics();
+    let p = wp.get_workers_panic_info();
     println!("{p:?}");
     assert_eq!(p.len(), 1);
 }
@@ -327,7 +429,7 @@ fn test_thread_guardian_multiple_panics_in_worker_using_min_workers() {
 
     // Cleanup so no leaks.
     wp.stop_wait();
-    println!("{:#?}", wp.view_worker_panics());
+    println!("{:#?}", wp.get_workers_panic_info());
 }
 
 #[test]
@@ -653,33 +755,38 @@ fn test_multiple_pause_resume_resets_resume_channel() {
 fn test_example_get_results_from_task() {
     let max_workers = 2;
     let wp = WPool::new(max_workers);
-
+    let expected_result = 88;
     let (tx, rx) = mpsc::sync_channel::<u8>(0);
 
+    // Clone sender and pass into job.
     let tx_clone = tx.clone();
     wp.submit(move || {
+        //
+        // Do work here.
+        //
         thread::sleep(Duration::from_millis(500));
-
         //
-        // Pretend we are running code here that performs some task..
+        let result_from_doing_work = 88;
         //
 
-        let result_from_task = 69;
-        if let Err(e) = tx_clone.send(result_from_task) {
+        if let Err(e) = tx_clone.send(result_from_doing_work) {
             panic!("error sending results to main thread from worker! : Error={e:?}");
         }
         println!("success! sent results from worker to main!");
     });
 
-    // Pause until we get our result. This is not necessary in this case, as
-    // our channel can act as a pseudo pauser.
-    // If we were using an unbounded channel, we may want to use pause ot wait
-    // for the result of any running task (like if we need to use the result elsewhere).
+    // Pause until we get our result. This is not necessary in this case, as our channel
+    // is acting as a pseudo pauser. If we were using an unbounded channel, we may want
+    // to use pause in order to wait for the result of any running task (like if we need
+    // to use the result elsewhere).
     //
     // wp.pause();
 
     match rx.recv() {
-        Ok(result) => assert_eq!(result, 69, "expected 69 got {result}"),
+        Ok(result) => assert_eq!(
+            result, expected_result,
+            "expected {expected_result} got {result}"
+        ),
         Err(e) => panic!("unexpected channel error : {e:?}"),
     }
 
@@ -1395,205 +1502,4 @@ fn test_wait_group_done_wait_race() {
         wg.done();
         wg.wait();
     });
-}
-
-#[test]
-fn test_threaded_deque_push_pop_basic() {
-    let deque = ThreadedDeque::new();
-    assert!(deque.is_empty());
-    assert_eq!(deque.len(), 0);
-    deque.push_back(1);
-    deque.push_back(2);
-    assert!(!deque.is_empty());
-    assert_eq!(deque.len(), 2);
-    assert_eq!(deque.pop_front(), Some(1));
-    assert_eq!(deque.pop_back(), Some(2));
-    assert!(deque.is_empty());
-}
-
-#[test]
-fn test_threaded_deque_test_front_clone() {
-    let deque = ThreadedDeque::new();
-    deque.push_back(42);
-    let front = deque.front();
-    assert_eq!(front, Some(42));
-    // The deque itself is unchanged
-    assert_eq!(deque.len(), 1);
-    assert_eq!(deque.pop_front(), Some(42));
-}
-
-#[test]
-fn test_threaded_deque_clone_shares_state() {
-    let deque1 = ThreadedDeque::new();
-    let deque2 = deque1.clone();
-    deque1.push_back(10);
-    // Both see the same element
-    assert_eq!(deque2.front(), Some(10));
-    // Popping from one affects the other
-    assert_eq!(deque2.pop_front(), Some(10));
-    assert!(deque1.is_empty());
-}
-
-#[test]
-fn test_threaded_deque_concurrent_access() {
-    let deque = ThreadedDeque::new();
-
-    let handles: Vec<_> = (0..10)
-        .map(|i| {
-            let dq = deque.clone();
-            thread::spawn(move || {
-                dq.push_back(i);
-            })
-        })
-        .collect();
-
-    for h in handles {
-        h.join().unwrap();
-    }
-
-    assert_eq!(deque.len(), 10);
-
-    // Pop all values concurrently
-    let handles: Vec<_> = (0..10)
-        .map(|_| {
-            let dq = deque.clone();
-            thread::spawn(move || dq.pop_front())
-        })
-        .collect();
-
-    let mut results = vec![];
-    for h in handles {
-        if let Some(v) = h.join().unwrap() {
-            results.push(v);
-        }
-    }
-
-    results.sort();
-    assert_eq!(results, (0..10).collect::<Vec<_>>());
-    assert!(deque.is_empty());
-}
-
-#[test]
-fn test_threaded_deque_empty_pop_front_back() {
-    let deque: ThreadedDeque<i32> = ThreadedDeque::new();
-    assert_eq!(deque.pop_front(), None);
-    assert_eq!(deque.pop_back(), None);
-    assert_eq!(deque.front(), None);
-}
-
-#[test]
-fn test_threaded_deque_len_is_empty_consistency() {
-    let deque = ThreadedDeque::new();
-    assert!(deque.is_empty());
-    assert_eq!(deque.len(), 0);
-    deque.push_back(1);
-    assert!(!deque.is_empty());
-    assert_eq!(deque.len(), 1);
-    deque.pop_front();
-    assert!(deque.is_empty());
-    assert_eq!(deque.len(), 0);
-}
-
-#[test]
-fn test_threaded_deque_front_pop_and_front_race() {
-    // Imagine you have one thread that loops and just calls pop_front.
-    // You have anything thread that needs to check something is at front,
-    // getting a reference to it, then uses that ref in some operation.
-    // Suppose that operation could fail, which is why they only call
-    // pop_front after 'that operation' was successful with the cloned front.
-    // When they call pop_front they won't be popping what they think they are.
-    // Due to the other thread constantly popping front, there's a race.
-    // This test tests for that race.
-    run_test_n_times(100, 0, false, || {
-        let num_elements = 1000;
-
-        let deque = ThreadedDeque::new();
-        for i in 0..num_elements {
-            deque.push_back(i);
-        }
-
-        // thread that checks front, then if it is Some, pops front.
-        // In between checking the front, and popping the front, it is
-        // possible that another thread could have popped prior...
-        let check_front_deque = deque.clone();
-        let checker_thread = thread::spawn(move || {
-            // To combat this, acquire the lock.
-            let mut deque_guard = check_front_deque.lock();
-            while !deque_guard.is_empty() {
-                if let Some(got) = deque_guard.front().cloned() {
-                    let popped = deque_guard.pop_front();
-                    assert_eq!(got, popped.unwrap());
-                }
-            }
-        });
-
-        let pop_deque = deque.clone();
-        let popper_thread = thread::spawn(move || {
-            while !pop_deque.is_empty() {
-                let _ = pop_deque.pop_front();
-            }
-        });
-
-        checker_thread.join().unwrap();
-        popper_thread.join().unwrap();
-    });
-}
-
-#[test]
-#[should_panic]
-fn test_threaded_deque_front_pop_front_race_should_panic() {
-    // Imagine you have one thread that loops and just calls pop_front.
-    // You have anything thread that needs to check something is at front,
-    // getting a reference to it, then uses that ref in some operation.
-    // Suppose that operation could fail, which is why they only call
-    // pop_front after 'that operation' was successful with the cloned front.
-    // When they call pop_front they won't be popping what they think they are.
-    // Due to the other thread constantly popping front, there's a race.
-    // This test tests for that race.
-    run_test_n_times(10, 0, false, || {
-        let num_elements = 1000;
-
-        let deque = ThreadedDeque::new();
-        for i in 0..num_elements {
-            deque.push_back(i);
-        }
-
-        // thread that checks front, then if it is Some, pops front.
-        // In between checking the front, and popping the front, it is
-        // possible that another thread could have popped prior...
-        let check_front_deque = deque.clone();
-        let checker_thread = thread::spawn(move || {
-            while !check_front_deque.is_empty() {
-                if let Some(got) = check_front_deque.front() {
-                    let popped = check_front_deque.pop_front();
-                    //assert_eq!(got, popped.unwrap());
-                    if got != popped.unwrap() {
-                        panic!("race detected!!!");
-                    }
-                }
-            }
-        });
-
-        let pop_deque = deque.clone();
-        let popper_thread = thread::spawn(move || {
-            while !pop_deque.is_empty() {
-                let _ = pop_deque.pop_front();
-            }
-        });
-
-        checker_thread.join().unwrap();
-        popper_thread.join().unwrap();
-    });
-}
-
-#[test]
-fn test_threaded_deque_lock() {
-    let deque = ThreadedDeque::new();
-    let element = 1;
-    deque.push_back(element);
-    let mut lock = deque.lock();
-    let popped = lock.pop_front();
-    drop(lock);
-    assert!(deque.is_empty());
-    assert_eq!(popped.unwrap(), element);
 }

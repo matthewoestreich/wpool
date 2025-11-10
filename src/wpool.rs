@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     panic::{self},
     sync::{
         Arc, Mutex, Once,
@@ -10,7 +11,7 @@ use std::{
 };
 
 use crate::{
-    PanicInfo, Signal, Task, ThreadGuardian, ThreadedDeque, WPoolStatus, WaitGroup,
+    PanicInfo, Signal, Task, ThreadGuardian, WPoolStatus, WaitGroup,
     channel::{Channel, Receiver, Sender, bounded, unbounded},
     safe_lock,
 };
@@ -89,6 +90,15 @@ impl WPool {
     /// The `max_workers` parameter specifies the maximum number of workers that can
     /// execute tasks concurrently. When there are no incoming tasks, workers are
     /// gradually stopped until there are no remaining workers.
+    ///
+    /// ```rust
+    /// use wpool::WPool;
+    ///
+    /// let max_workers = 5;
+    /// let wp = WPool::new(max_workers);
+    /// wp.stop_wait();
+    /// ```
+    ///
     pub fn new(max_workers: usize) -> Self {
         Self::new_base(max_workers, 0)
     }
@@ -104,21 +114,83 @@ impl WPool {
     /// eliminate the overhead of spinning up threads from scratch.
     /// If `min_workers` is greater than `max_workers` then we change `min_workers` to
     /// equal `max_workers`.
+    ///
+    /// ```rust
+    /// use wpool::WPool;
+    ///
+    /// let max_workers = 5;
+    /// let min_workers = 3;
+    /// let wp = WPool::new_with_min(max_workers, min_workers);
+    /// wp.stop_wait();
+    /// ```
+    ///
     pub fn new_with_min(max_workers: usize, min_workers: usize) -> Self {
         Self::new_base(max_workers, min_workers)
     }
 
-    /// The number of `max_workers`.
+    /// The number of possible `max_workers`. This does not reflect active workers.
+    ///
+    /// ```rust
+    /// use wpool::WPool;
+    ///
+    /// let max_workers = 5;
+    /// let wp = WPool::new(max_workers);
+    /// assert_eq!(wp.max_capacity(), max_workers);
+    /// wp.stop_wait();
+    /// ```
+    ///
     pub fn max_capacity(&self) -> usize {
         self.max_workers
     }
 
-    /// The number of `min_workers`.
+    /// The number of possible `min_workers`. This does not reflect active workers.
+    ///
+    /// ```rust
+    /// use wpool::WPool;
+    ///
+    /// let max_workers = 5;
+    /// let min_workers = 3;
+    /// let wp = WPool::new_with_min(max_workers, min_workers);
+    /// assert_eq!(wp.max_capacity(), max_workers);
+    /// assert_eq!(wp.min_capacity(), min_workers);
+    /// wp.stop_wait();
+    /// ```
+    ///
     pub fn min_capacity(&self) -> usize {
         self.min_workers
     }
 
     /// The number of active workers.
+    ///
+    /// ```rust
+    /// use wpool::WPool;
+    /// use std::thread;
+    /// use std::time::Duration;
+    ///
+    /// let max_workers = 5;
+    /// let wp = WPool::new(max_workers);
+    ///
+    /// // Should have 0 workers here.
+    /// assert_eq!(wp.worker_count(), 0);
+    ///
+    /// for _ in 0..max_workers {
+    ///     wp.submit(move || {
+    ///         thread::sleep(Duration::from_secs(1));
+    ///     });
+    /// }
+    ///
+    /// // Give some time for worker to spawn.
+    /// thread::sleep(Duration::from_millis(5));
+    ///
+    /// // Should have `max_workers` amount of workers.
+    /// assert_eq!(wp.worker_count(), max_workers);
+    ///
+    /// wp.stop_wait();
+    ///
+    /// // Should have 0 workers now.
+    /// assert_eq!(wp.worker_count(), 0);
+    /// ```
+    ///
     pub fn worker_count(&self) -> usize {
         self.worker_count.load(Ordering::SeqCst)
     }
@@ -134,6 +206,7 @@ impl WPool {
     ///
     /// As long as there are tasks in the wait queue, any additional new tasks are put in the
     /// wait queue. Tasks are removed from the wait queue as workers become available.
+    ///
     pub fn submit<F>(&self, task: F)
     where
         F: FnOnce() + Send + 'static,
@@ -143,6 +216,33 @@ impl WPool {
     }
 
     /// Enqueues the given function and blocks until it has been executed.
+    /// Unlike `submit_confirm(...)`, this method waits until the job has finished executing.
+    /// `submit_confirm(...)` only blocks until the task is either assigned to a worker or queued.
+    ///
+    /// ```rust
+    /// use wpool::WPool;
+    /// use std::time::Duration;
+    /// use std::thread;
+    /// use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    ///
+    /// let wp = WPool::new(2);
+    /// let counter = Arc::new(AtomicUsize::new(0));
+    ///
+    /// let c = Arc::clone(&counter);
+    ///
+    /// // Block here until submitted job finishes.
+    /// wp.submit_wait(move || {
+    ///     // If we fail to wait for this job to finish,
+    ///     // our assert will run before this `Duration`.
+    ///     thread::sleep(Duration::from_secs(1));
+    ///     c.fetch_add(1, Ordering::SeqCst);
+    /// });
+    ///
+    /// // Verify we waited for execution.
+    /// assert_eq!(counter.load(Ordering::SeqCst), 1);
+    /// wp.stop_wait();
+    /// ```
+    ///
     pub fn submit_wait<F>(&self, task: F)
     where
         F: FnOnce() + Send + 'static,
@@ -155,6 +255,43 @@ impl WPool {
         let _ = rx.recv(); // blocks until complete
     }
 
+    /// Enqueues the given function and blocks until it has been either given to a worker or queued.
+    /// Unlike `submit_wait(...)`, this method only blocks until the task is either assigned to
+    /// a worker or queued.
+    ///
+    /// ```rust
+    /// use wpool::WPool;
+    /// use std::thread;
+    /// use std::time::Duration;
+    ///
+    /// let max_workers = 5;
+    /// let wp = WPool::new(max_workers);
+    ///
+    /// for i in 1..=max_workers {
+    ///     // Will block here until job is *submitted*.
+    ///     wp.submit_confirm(|| {
+    ///         thread::sleep(Duration::from_secs(2));
+    ///     });
+    ///     // Now you know that a worker has been spawned, or job
+    ///     // placed in queue (which means we are already at max workers).
+    ///     assert_eq!(wp.worker_count(), i);
+    /// }
+    ///
+    /// assert_eq!(wp.worker_count(), max_workers);
+    /// wp.stop_wait();
+    /// ```
+    ///
+    pub fn submit_confirm<F>(&self, task: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let (tx, rx) = mpsc::sync_channel(0);
+        let t = Task::new(Box::new(task));
+        let s = Signal::NewTaskWithConfirmation(t, tx);
+        self.submit_signal(s);
+        let _ = rx.recv();
+    }
+
     /// Stops the pool and waits for currently running tasks, as well as any tasks
     /// in the wait queue, to complete. Task submission is disallowed after
     /// `stop_wait()` has been called.
@@ -162,6 +299,36 @@ impl WPool {
     /// **Since creating the pool starts at least one thread, for the dispatcher,
     /// `stop()` or `stop_wait()` should only be called when the worker pool is no
     /// longer needed**.
+    ///
+    /// ```rust
+    /// use wpool::WPool;
+    /// use std::time::Duration;
+    /// use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    /// use std::thread;
+    ///
+    /// let max_workers = 3;
+    /// // `num_jobs` is greater than `max_workers` so we can get jobs into wait queue.
+    /// let num_jobs = 5;
+    /// let wp = WPool::new(max_workers);
+    ///
+    /// let counter = Arc::new(AtomicUsize::new(0));
+    ///
+    /// for _ in 0..num_jobs {
+    ///     let c = Arc::clone(&counter);
+    ///     wp.submit(move || {
+    ///         // Sleep for a while so jobs are put into wait queue.
+    ///         thread::sleep(Duration::from_secs(1));
+    ///         // Increment counter to prove job executed.
+    ///         c.fetch_add(1, Ordering::SeqCst);
+    ///     });
+    /// }
+    ///
+    /// // Allow currently executing jobs to complete PLUS the wait queue.
+    /// wp.stop_wait();
+    /// // Verify that all jobs executed.
+    /// assert_eq!(counter.load(Ordering::SeqCst), num_jobs);
+    /// ```
+    ///
     pub fn stop_wait(&self) {
         self.shutdown(true);
     }
@@ -173,6 +340,36 @@ impl WPool {
     /// **Since creating the pool starts at least one thread, for the dispatcher,
     /// `stop()` or `stop_wait()` should only be called when the worker pool is no
     /// longer needed**.
+    ///
+    /// ```rust
+    /// use wpool::WPool;
+    /// use std::time::Duration;
+    /// use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    /// use std::thread;
+    ///
+    /// let max_workers = 3;
+    /// // `num_jobs` is greater than `max_workers` so we can get jobs into wait queue.
+    /// let num_jobs = 5;
+    /// let wp = WPool::new(max_workers);
+    ///
+    /// let counter = Arc::new(AtomicUsize::new(0));
+    ///
+    /// for _ in 0..num_jobs {
+    ///     let c = Arc::clone(&counter);
+    ///     wp.submit(move || {
+    ///         // Sleep for a while so jobs are put into wait queue.
+    ///         thread::sleep(Duration::from_secs(1));
+    ///         // Increment counter to prove job executed.
+    ///         c.fetch_add(1, Ordering::SeqCst);
+    ///     });
+    /// }
+    ///
+    /// // Allow currently executing jobs to complete BUT abandoned the wait queue.
+    /// wp.stop();
+    /// // Verify that only up to `max_workers` jobs were complete.
+    /// assert_eq!(counter.load(Ordering::SeqCst), max_workers);
+    /// ```
+    ///
     pub fn stop(&self) {
         self.shutdown(false);
     }
@@ -189,6 +386,30 @@ impl WPool {
     /// If the number of active workers is less than the pool maximum, workers will
     /// be spawned, up to the pool maximum, and immediately paused. This ensures that
     /// every worker that could possibly exist in the pool is paused.
+    ///
+    /// ```rust
+    /// use wpool::WPool;
+    /// let wp = WPool::new(2);
+    ///
+    /// // Suppose you had a long running job that you need to wait for...
+    /// wp.submit(|| { /* Doing lots of work */ });
+    ///
+    /// //
+    /// // ...but you had other tasks to do.
+    /// //
+    /// // Doing unrelated work here...
+    /// //
+    ///
+    /// // Now you need to ensure your long running job is finished.
+    /// // `pause()` will block until all currently executing jobs have finished.
+    /// wp.pause();
+    ///
+    /// // Now you know it has finished.
+    ///
+    /// wp.resume();
+    /// wp.stop_wait();
+    /// ```
+    ///
     pub fn pause(&self) {
         // Acquire lock for duration of this process, so we aren't interrupted by a shutdown.
         let resume_signal = safe_lock(&self.shutdown_lock);
@@ -215,6 +436,16 @@ impl WPool {
     }
 
     /// Resumes/unpauses all paused workers.
+    /// If the pool is already stopped or is not paused we return early.
+    ///
+    /// ```rust
+    /// use wpool::WPool;
+    /// let wp = WPool::new(2);
+    /// wp.pause();
+    /// wp.resume();
+    /// wp.stop_wait();
+    /// ```
+    ///
     pub fn resume(&self) {
         // Acquire lock for duration of this process, so we aren't interrupted by a shutdown.
         let mut resume_signal = safe_lock(&self.shutdown_lock);
@@ -231,13 +462,58 @@ impl WPool {
         self.set_status(WPoolStatus::Running);
     }
 
-    /// Waits for dispatcher to set dispatch thread to spawn.
+    /// Waits for dispatcher thread to spawn.
+    /// This is mostly used in tests but I figured it may be useful to expose to the public.
+    /// 99.9999999999% of the time you won't use this.
+    ///
+    /// ```rust
+    /// use wpool::WPool;
+    ///
+    /// let wp = WPool::new(2);
+    /// // Block until dispatch thread has spawned.
+    /// wp.wait_ready();
+    /// // Dispatch has confirmed spawn.
+    /// wp.submit(|| { /* ...work... */ });
+    /// wp.stop_wait();
+    /// ```
+    ///
     pub fn wait_ready(&self) {
         self.is_dispatch_ready.wait()
     }
 
     /// Returns all PanicInfo for workers that have panicked.
-    pub fn view_worker_panics(&self) -> Vec<PanicInfo> {
+    ///
+    /// ```rust
+    /// use wpool::WPool;
+    ///
+    /// let wp = WPool::new(3);
+    /// wp.submit(|| panic!("something went wrong!"));
+    /// // Wait for currently running jobs to finish.
+    /// wp.pause();
+    /// println!("{:#?}", wp.get_workers_panic_info());
+    /// // [
+    /// //     PanicInfo {
+    /// //         thread_id: ThreadId(
+    /// //             9,
+    /// //         ),
+    /// //         payload: Some(
+    /// //             "something went wrong!",
+    /// //         ),
+    /// //         file: Some(
+    /// //             "src/file.rs",
+    /// //         ),
+    /// //         line: Some(
+    /// //             163,
+    /// //         ),
+    /// //         column: Some(
+    /// //             19,
+    /// //         ),
+    /// //     },
+    /// // ]
+    /// wp.stop_wait();
+    /// ```
+    ///
+    pub fn get_workers_panic_info(&self) -> Vec<PanicInfo> {
         safe_lock(&self.panics).to_vec()
     }
 
@@ -259,7 +535,7 @@ impl WPool {
         thread::spawn(move || {
             let mut is_idle = false;
             let wait_group = WaitGroup::new();
-            let waiting_queue = ThreadedDeque::new();
+            let mut waiting_queue = VecDeque::new();
 
             // Set ready flag after thread has spawned but JUST prior to main loop.
             is_spawned.done();
@@ -268,7 +544,7 @@ impl WPool {
                 // See `process_waiting_queue` comments for more info.
                 if !waiting_queue.is_empty() {
                     if !Self::process_waiting_queue(
-                        &waiting_queue,
+                        &mut waiting_queue,
                         &waiting_queue_len,
                         &task_receiver,
                         worker_channel.sender_ref(),
@@ -279,7 +555,7 @@ impl WPool {
                 }
 
                 // Get signal from task channel, handles killing idle workers.
-                let signal = match task_receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
+                let mut signal = match task_receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
                     Ok(signal) => signal,
                     Err(RecvTimeoutError::Timeout) => {
                         if is_idle
@@ -297,9 +573,13 @@ impl WPool {
 
                 // Got a signal. Process it by placing in wait queue or handing to worker.
                 if worker_count.load(Ordering::SeqCst) >= max_workers {
-                    let mut wq = waiting_queue.lock();
-                    wq.push_back(signal);
-                    waiting_queue_len.store(wq.len(), Ordering::SeqCst);
+                    // If `submit_confirm(...)` was called send confirmation and wrap the task in a plain NewTask.
+                    if let Signal::NewTaskWithConfirmation(task, confirm) = signal {
+                        drop(confirm);
+                        signal = Signal::NewTask(task);
+                    }
+                    waiting_queue.push_back(signal);
+                    waiting_queue_len.store(waiting_queue.len(), Ordering::SeqCst);
                 } else {
                     wait_group.add(1);
                     Self::spawn_worker(signal, wait_group.clone(), worker_channel.clone_receiver());
@@ -311,7 +591,7 @@ impl WPool {
             // If `stop_wait()` was called run tasks and waiting queue.
             if WPoolStatus::from_u8(status.load(Ordering::SeqCst)) == WPoolStatus::Stopped(true) {
                 Self::run_queued_tasks(
-                    &waiting_queue,
+                    &mut waiting_queue,
                     &waiting_queue_len,
                     worker_channel.sender_ref(),
                 );
@@ -333,30 +613,25 @@ impl WPool {
     /// queue. Once the waiting queue is empty, then go back to submitting incoming
     /// signals directly to available workers.
     fn process_waiting_queue(
-        waiting_queue: &ThreadedDeque<Signal>,
+        waiting_queue: &mut VecDeque<Signal>,
         waiting_queue_len: &AtomicUsize,
         task_receiver: &Receiver<Signal>,
         worker_sender: &Sender<Signal>,
     ) -> bool {
         match task_receiver.try_recv() {
             Ok(signal) => {
-                let mut wq = waiting_queue.lock();
-                wq.push_back(signal);
-                waiting_queue_len.store(wq.len(), Ordering::SeqCst);
-                drop(wq);
+                waiting_queue.push_back(signal);
+                waiting_queue_len.store(waiting_queue.len(), Ordering::SeqCst);
             }
             Err(TryRecvError::Empty) => {
-                // To prevent a race, lock deque while checking front + popping front.
-                let mut wq = waiting_queue.lock();
-                if let Some(signal) = wq.front()
+                if let Some(signal) = waiting_queue.front()
                     && let Ok(_) = worker_sender.try_send(signal.clone())
                 {
                     // Only pop off (modify) waitiing queue once we know the
                     // signal was successfully passed into the worker channel.
-                    wq.pop_front();
-                    waiting_queue_len.store(wq.len(), Ordering::SeqCst);
+                    waiting_queue.pop_front();
+                    waiting_queue_len.store(waiting_queue.len(), Ordering::SeqCst);
                 }
-                drop(wq); // Drop the lock ASAP
             }
             // Task channel closed.
             Err(_) => return false,
@@ -366,21 +641,19 @@ impl WPool {
 
     /// Essentially drains the wait_queue.
     fn run_queued_tasks(
-        waiting_queue: &ThreadedDeque<Signal>,
+        waiting_queue: &mut VecDeque<Signal>,
         waiting_queue_len: &AtomicUsize,
         worker_sender: &Sender<Signal>,
     ) {
-        // Lock the entire wait queue for the entire duration of this process.
-        let mut wq = waiting_queue.lock();
-        while !wq.is_empty() {
+        while !waiting_queue.is_empty() {
             // Get a **reference** to the element at the front of waiting queue, if exists.
-            if let Some(signal) = wq.front()
+            if let Some(signal) = waiting_queue.front()
                 && let Ok(_) = worker_sender.try_send(signal.clone())
             {
                 // Only pop off (modify) waitiing queue once we know the
                 // signal was successfully passed into the worker channel.
-                wq.pop_front();
-                waiting_queue_len.store(wq.len(), Ordering::SeqCst);
+                waiting_queue.pop_front();
+                waiting_queue_len.store(waiting_queue.len(), Ordering::SeqCst);
             }
         }
     }
@@ -403,6 +676,10 @@ impl WPool {
             while signal_maybe.is_some() {
                 match signal_maybe.take().expect("is_some()") {
                     Signal::NewTask(task) => task.run(),
+                    Signal::NewTaskWithConfirmation(task, confirm) => {
+                        drop(confirm);
+                        task.run();
+                    }
                     Signal::Terminate => break,
                 }
                 signal_maybe = match worker_receiver.recv() {

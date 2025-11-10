@@ -4,10 +4,11 @@
 //!
 //! # Examples
 //!
-//! ## Pool with only worker maximum
+//! ## Worker Maximum
 //!
 //! ```rust
 //! use wpool::WPool;
+//!
 //! // At most 10 workers can run at once.
 //! let max_workers = 10;
 //!
@@ -29,7 +30,7 @@
 //! pool.stop_wait();
 //! ```
 //!
-//! ## Pool with both worker maximum and worker minimum
+//! ## Worker Maximum and Minimum
 //!
 //! `min_workers` defines (up to) the minimum number of worker threads that should always stay alive, even when the pool is idle.
 //!
@@ -48,7 +49,7 @@
 //! // Submit as many functions as you'd like.
 //! pool.submit(|| {
 //!     // Do some work.
-//!     println!("doing the thing")
+//!     println!("doing the thing");
 //! });
 //!
 //! pool.submit(|| {
@@ -61,7 +62,91 @@
 //! pool.stop_wait();
 //! ```
 //!
-//! ## Get a result out of submitted task
+//! ## Capturing
+//!
+//! ```rust
+//! use wpool::WPool;
+//!
+//! #[derive(Clone, Debug)]
+//! struct Foo {
+//!     foo: u8,
+//! }
+//!
+//! let wp = WPool::new(3);
+//! let my_foo = Foo { foo: 1 };
+//!
+//! // You can either clone before capturing:
+//! let my_foo_clone = my_foo.clone();
+//! wp.submit(move || {
+//!     println!("{my_foo_clone:?}");
+//! });
+//!
+//! // Or allow the closure to consume (eg. move ownership):
+//! wp.submit(move || {
+//!     println!("{my_foo:?}");
+//! });
+//!
+//! wp.stop_wait();
+//! ```
+//!
+//! ## Submit as Fast as Possible
+//!
+//! You just want to submit jobs as fast as possible without any blocking. Does not wait for any sort of confirmation.
+//!
+//! Does not block under any circumstance by default.
+//!
+//! ```rust
+//! use wpool::WPool;
+//!
+//! let wp = WPool::new(5);
+//!
+//! for i in 1..=100 {
+//!     wp.submit(move || {
+//!         println!("job {i}");
+//!     });
+//! }
+//! ```
+//!
+//! ## Wait for Submission to Execute
+//!
+//! ```rust
+//! use wpool::WPool;
+//!
+//! let wp = WPool::new(2);
+//!
+//! // Will block here until job is *executed*.
+//! wp.submit_wait(|| { println!("work"); });
+//! wp.stop_wait();
+//! ```
+//!
+//! ## Wait for Submission to be Submitted
+//!
+//! Wait until your submission is either given to a worker or queued. **Does not wait for you submission to be executed, only submitted.**
+//!
+//! This can be useful in loops when you need to know that everything has been submitted. Meaning, you now know workers have for sure been spawned.
+//!
+//! ```rust
+//! use wpool::WPool;
+//! use std::thread;
+//! use std::time::Duration;
+//!
+//! let max_workers = 5;
+//! let wp = WPool::new(max_workers);
+//!
+//! for i in 1..=max_workers {
+//!     // Will block here until job is *submitted*.
+//!     wp.submit_confirm(|| {
+//!         thread::sleep(Duration::from_secs(2));
+//!     });
+//!     // Now you know that a worker has been spawned, or job placed in queue (which means we are already at max workers).
+//!     assert_eq!(wp.worker_count(), i);
+//! }
+//!
+//! assert_eq!(wp.worker_count(), max_workers);
+//! wp.stop_wait();
+//! ```
+//!
+//! ## Get Results from Job
 //!
 //! ```rust
 //! use wpool::WPool;
@@ -71,8 +156,10 @@
 //!
 //! let max_workers = 2;
 //! let wp = WPool::new(max_workers);
+//! let expected_result = 88;
 //! let (tx, rx) = mpsc::sync_channel::<u8>(0);
 //!
+//! // Clone sender and pass into job.
 //! let tx_clone = tx.clone();
 //! wp.submit(move || {
 //!     //
@@ -80,7 +167,7 @@
 //!     //
 //!     thread::sleep(Duration::from_millis(500));
 //!     //
-//!     let result_from_doing_work = 69;
+//!     let result_from_doing_work = 88;
 //!     //
 //!
 //!     if let Err(e) = tx_clone.send(result_from_doing_work) {
@@ -89,18 +176,55 @@
 //!     println!("success! sent results from worker to main!");
 //! });
 //!
-//! // Pause until we get our result. This is not necessary in this case, as
-//! // our channel can act as a pseudo pauser.
-//! // If we were using an unbounded channel, we may want to use pause in order to wait
-//! // for the result of any running task (like if we need to use the result elsewhere).
+//! // Pause until we get our result. This is not necessary in this case, as our channel
+//! // is acting as a pseudo pauser. If we were using an unbounded channel, we may want
+//! // to use pause in order to wait for the result of any running task (like if we need
+//! // to use the result elsewhere).
 //! //
 //! // wp.pause();
 //!
 //! match rx.recv() {
-//!     Ok(result) => assert_eq!(result, 69, "expected 69 got {result}"),
+//!     Ok(result) => assert_eq!(
+//!         result, expected_result,
+//!         "expected {expected_result} got {result}"
+//!     ),
 //!     Err(e) => panic!("unexpected channel error : {e:?}"),
 //! }
 //!
+//! wp.stop_wait();
+//! ```
+//!
+//! ## View Tasks that Panicked
+//!
+//! We collect panic info which can be accessed via `<instance>.get_workers_panic_info()`.
+//!
+//! ```rust
+//! use wpool::WPool;
+//!
+//! let wp = WPool::new(3);
+//! wp.submit(|| panic!("something went wrong!"));
+//! // Wait for currently running jobs to finish.
+//! wp.pause();
+//! println!("{:#?}", wp.get_workers_panic_info());
+//! // [
+//! //     PanicInfo {
+//! //         thread_id: ThreadId(
+//! //             9,
+//! //         ),
+//! //         payload: Some(
+//! //             "something went wrong!",
+//! //         ),
+//! //         file: Some(
+//! //             "src/file.rs",
+//! //         ),
+//! //         line: Some(
+//! //             163,
+//! //         ),
+//! //         column: Some(
+//! //             19,
+//! //         ),
+//! //     },
+//! // ]
 //! wp.stop_wait();
 //! ```
 #![allow(clippy::too_many_arguments)]
@@ -114,12 +238,12 @@ pub mod pacer;
 pub use wpool::WPool;
 
 use std::{
-    collections::VecDeque,
     fmt::{self, Display, Formatter},
     panic::PanicHookInfo,
     sync::{
         Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicUsize, Ordering},
+        mpsc,
     },
     thread::{self, ThreadId},
 };
@@ -219,6 +343,8 @@ impl fmt::Debug for WPoolStatus {
 #[derive(Clone)]
 pub(crate) enum Signal {
     NewTask(Task),
+    // Blocks until the task is either assigned to a worker or queued.
+    NewTaskWithConfirmation(Task, mpsc::SyncSender<()>),
     Terminate,
 }
 
@@ -226,6 +352,7 @@ impl Display for Signal {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Signal::NewTask(_) => write!(f, "Signal::NewTask(Task)"),
+            Signal::NewTaskWithConfirmation(..) => write!(f, "Signal::NewTaskWithConfirmation"),
             Signal::Terminate => write!(f, "Signal::Terminate"),
         }
     }
@@ -340,70 +467,6 @@ impl WaitGroup {
         while self.inner.count.load(Ordering::SeqCst) > 0 {
             guard = self.inner.cvar.wait(guard).unwrap();
         }
-    }
-}
-
-/*********************************** ThreadedDeque **************************************/
-
-// ThreadedDeque is a threadsafe VecDeque.
-pub(crate) struct ThreadedDeque<T> {
-    inner: Arc<Mutex<VecDeque<T>>>,
-}
-
-impl<T> Clone for ThreadedDeque<T> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-        }
-    }
-}
-
-#[allow(dead_code)]
-impl<T> ThreadedDeque<T> {
-    pub(crate) fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(VecDeque::new())),
-        }
-    }
-
-    /// If you want to get the MutexGuard for the inner VecDeque<T>
-    /// This is not needed to use any methods!
-    pub(crate) fn lock(&self) -> MutexGuard<'_, VecDeque<T>> {
-        safe_lock(&self.inner)
-    }
-
-    #[inline]
-    pub(crate) fn len(&self) -> usize {
-        safe_lock(&self.inner).len()
-    }
-
-    #[inline]
-    pub(crate) fn is_empty(&self) -> bool {
-        safe_lock(&self.inner).is_empty()
-    }
-
-    #[inline]
-    pub(crate) fn push_back(&self, value: T) {
-        safe_lock(&self.inner).push_back(value);
-    }
-
-    #[inline]
-    pub(crate) fn pop_back(&self) -> Option<T> {
-        safe_lock(&self.inner).pop_back()
-    }
-
-    #[inline]
-    pub(crate) fn pop_front(&self) -> Option<T> {
-        safe_lock(&self.inner).pop_front()
-    }
-
-    /// Returns a clone of the front. **DOES NOT MODIFY THE UNDERLYING VecDeque**
-    #[inline]
-    pub(crate) fn front(&self) -> Option<T>
-    where
-        T: Clone,
-    {
-        safe_lock(&self.inner).front().cloned()
     }
 }
 
