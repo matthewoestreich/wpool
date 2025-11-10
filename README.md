@@ -95,6 +95,24 @@ wp.submit(move || {
 wp.stop_wait();
 ```
 
+## Submit as Fast as Possible
+
+You just want to submit jobs as fast as possible without any blocking. Does not wait for any sort of confirmation.
+
+Does not block under any circumstance by default.
+
+```rust
+use wpool::WPool;
+
+let wp = WPool::new(5);
+
+for i in 1..=100 {
+    wp.submit(move || {
+        println!("job {i}");
+    });
+}
+```
+
 ## Wait for Submission to Execute
 
 ```rust
@@ -126,8 +144,8 @@ for i in 1..=max_workers {
     wp.submit_confirm(|| {
         thread::sleep(Duration::from_secs(2));
     });
-    // Now you know that a worker has been spawned, or 
-    // job placed in queue (which means we are already 
+    // Now you know that a worker has been spawned, or
+    // job placed in queue (which means we are already
     // at max workers).
     assert_eq!(wp.worker_count(), i);
 }
