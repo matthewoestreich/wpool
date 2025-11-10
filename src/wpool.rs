@@ -39,14 +39,8 @@ pub struct WPool {
 impl WPool {
     // Private "quality-of-life" helper. Makes it so we don't have to update struct fields in multiple places.
     fn new_base(max_workers: usize, min_workers: usize) -> Self {
-        assert!(
-            max_workers > 0,
-            "[WPool] `max_workers` must be greater than 0!"
-        );
-        assert!(
-            max_workers >= min_workers,
-            "[WPool] `max_workers` must be greater than or equal to `min_workers`!"
-        );
+        assert!(max_workers > 0, "max_workers == 0");
+        assert!(max_workers >= min_workers, "min_workers > max_workers");
 
         let panics = Arc::new(Mutex::new(Vec::new()));
         let status = Arc::new(AtomicU8::new(WPoolStatus::Running.as_u8()));
@@ -55,12 +49,6 @@ impl WPool {
         let worker_channel = bounded(0);
         let task_channel = unbounded();
         let is_dispatch_ready = WaitGroup::new_with_delta(1);
-
-        let min_workers = if min_workers > max_workers {
-            max_workers
-        } else {
-            min_workers
-        };
 
         // Hook all panics.
         let panics_clone = Arc::clone(&panics);
