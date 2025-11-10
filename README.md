@@ -12,6 +12,8 @@ This library is essentially a port of [`workerpool`](https://github.com/gammazer
 
 ## Worker Maximum
 
+`max_workers` must be greater than 0! If `max_workers == 0` we panic.
+
 ```rust
 use wpool::WPool;
 
@@ -38,7 +40,7 @@ pool.stop_wait();
 
 ## Worker Maximum and Minimum
 
-`min_workers` defines (up to) the minimum number of worker threads that should always stay alive, even when the pool is idle.
+`min_workers` defines (up to) the minimum number of worker threads that should always stay alive, even when the pool is idle. If `min_workers` is greater than `max_workers`, we panic.
 
 **NOTE**: _We do not 'pre-spawn' workers!_ Meaning, if you set `min_workers = 3` but your pool only ever creates 2 workers, then only 2 workers will ever exist (and should always be alive).
 

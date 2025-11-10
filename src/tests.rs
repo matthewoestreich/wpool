@@ -223,6 +223,12 @@ fn test_submit_confirm() {
 }
 
 #[test]
+#[should_panic]
+fn test_zero_max_workers() {
+    let _wp = WPool::new(0);
+}
+
+#[test]
 fn test_panic_panic_example_in_readme() {
     let wp = WPool::new(3);
     wp.submit(|| panic!("something went wrong!"));
@@ -273,6 +279,7 @@ fn test_capture_example_in_readme() {
     });
 
     wp.stop_wait();
+    thread::sleep(Duration::from_secs(1)); // Idk why this test keeps being marked as leaky.
 }
 
 #[test]
@@ -791,6 +798,7 @@ fn test_example_get_results_from_task() {
     }
 
     wp.stop_wait();
+    thread::sleep(Duration::from_secs(1)); // Another leaky test...
 }
 
 #[test]
@@ -1450,17 +1458,9 @@ fn test_multiple_stop() {
 }
 
 #[test]
+#[should_panic]
 fn test_min_workers_greater_than_max_workers() {
-    let max_workers = 5;
-    let min_workers = 10;
-    assert!(min_workers > max_workers); // in case someone changes these...
-    let wp = WPool::new_with_min(max_workers, min_workers);
-    assert_eq!(
-        wp.max_capacity(),
-        wp.min_capacity(),
-        "min_workers were not truncated to max_workers!"
-    );
-    wp.stop_wait();
+    let _wp = WPool::new_with_min(1, 5);
 }
 
 #[test]

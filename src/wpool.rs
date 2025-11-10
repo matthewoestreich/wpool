@@ -39,6 +39,15 @@ pub struct WPool {
 impl WPool {
     // Private "quality-of-life" helper. Makes it so we don't have to update struct fields in multiple places.
     fn new_base(max_workers: usize, min_workers: usize) -> Self {
+        assert!(
+            max_workers > 0,
+            "[WPool] `max_workers` must be greater than 0!"
+        );
+        assert!(
+            max_workers >= min_workers,
+            "[WPool] `max_workers` must be greater than or equal to `min_workers`!"
+        );
+
         let panics = Arc::new(Mutex::new(Vec::new()));
         let status = Arc::new(AtomicU8::new(WPoolStatus::Running.as_u8()));
         let worker_count = Arc::new(AtomicUsize::new(0));
@@ -112,8 +121,8 @@ impl WPool {
     /// The `min_workers` parameter specifies up to the minimum amount of workers that
     /// should aways exist, even when the pool is idle. This is designed to help
     /// eliminate the overhead of spinning up threads from scratch.
-    /// If `min_workers` is greater than `max_workers` then we change `min_workers` to
-    /// equal `max_workers`.
+    ///
+    /// If `min_workers` is greater than `max_workers` we panic.
     ///
     /// ```rust
     /// use wpool::WPool;
