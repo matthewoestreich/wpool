@@ -7,7 +7,7 @@ use std::{
         mpsc::{self, RecvTimeoutError, TryRecvError},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -404,11 +404,11 @@ fn test_stop_abandoned_waiting_queue() {
 
         // let wait queue fill up
         work_ready.wait();
-        let mut wq_len = wp._waiting_queue_len();
+        let mut wq_len = wp.waiting_queue_len.load(Ordering::SeqCst);
         let max_iters = 100_000;
         let mut i = 0;
         while wq_len != num_jobs - max_workers && i < max_iters {
-            wq_len = wp._waiting_queue_len();
+            wq_len = wp.waiting_queue_len.load(Ordering::SeqCst);
             println!(
                 "wq_len={wq_len} | num_jobs - max_workers={}",
                 num_jobs - max_workers
@@ -420,7 +420,7 @@ fn test_stop_abandoned_waiting_queue() {
         releaser_chan.drop_sender();
         wp.stop();
         assert_eq!(
-            wp._waiting_queue_len(),
+            wp.waiting_queue_len.load(Ordering::SeqCst),
             num_jobs - max_workers,
             "Expected 0 jobs from wait queue to run after stop()"
         );
@@ -452,11 +452,11 @@ fn test_stop_wait_does_not_abandoned_waiting_queue() {
 
         // let wait queue fill up
         work_ready.wait();
-        let mut wq_len = wp._waiting_queue_len();
+        let mut wq_len = wp.waiting_queue_len.load(Ordering::SeqCst);
         let max_iters = 100_000; // Just incase, set a ceiling.
         let mut i = 0; // Just incase, set a ceiling.
         while wq_len != num_jobs - max_workers && i < max_iters {
-            wq_len = wp._waiting_queue_len();
+            wq_len = wp.waiting_queue_len.load(Ordering::SeqCst);
             println!(
                 "wq_len={wq_len} | num_jobs - max_workers={}",
                 num_jobs - max_workers
@@ -467,7 +467,7 @@ fn test_stop_wait_does_not_abandoned_waiting_queue() {
         // Release the hounds
         releaser_chan.drop_sender();
         wp.stop_wait();
-        let len = wp._waiting_queue_len();
+        let len = wp.waiting_queue_len.load(Ordering::SeqCst);
         assert_eq!(
             len, 0,
             "Expected waiting queue to be processed after calling stop_wait()! Instead, we have {len} items in wait queue!",
@@ -528,7 +528,7 @@ fn test_overflow() {
 
     // Now that the pool has exited, it is safe to inspect its waiting
     // queue without causing a race.
-    let wq_len = p._waiting_queue_len();
+    let wq_len = p.waiting_queue_len.load(Ordering::SeqCst);
     assert_eq!(
         wq_len, expected_len,
         "Expected waiting to queue to have len of '{expected_len}' but got '{wq_len}'"
@@ -549,6 +549,8 @@ fn test_job_actually_ran() {
 
     p.stop_wait();
     assert_eq!(counter.load(Ordering::SeqCst), 1);
+    // For some reason this test keeps saying it is leaky..
+    thread::sleep(Duration::from_secs(1));
 }
 
 #[test]
@@ -802,6 +804,7 @@ fn test_pause() {
         println!(">>>> [from test_pause] -> i ran 2");
         drop(ran_tx);
     });
+    println!(">>> test_pause -> after submit");
 
     // Check that a new task did not run while paused
     #[allow(clippy::single_match)]
@@ -811,8 +814,14 @@ fn test_pause() {
         _ => {}
     }
 
+    let c = wp.waiting_queue_len.load(Ordering::SeqCst);
+    println!(">>> test_pause -> about to assert wq_count=1 || wq_count is {c}");
     // Check that task was enqueued
-    assert_eq!(wp._waiting_queue_len(), 1, "waiting queue size should be 1");
+    assert_eq!(
+        wp.waiting_queue_len.load(Ordering::SeqCst),
+        1,
+        "waiting queue size should be 1"
+    );
 
     println!("made it to stop");
     wp.stop();
@@ -1014,7 +1023,9 @@ fn test_wait_queue_len_race_2() {
             if let Err(TryRecvError::Disconnected) = stop_rx.try_recv() {
                 break;
             }
-            let len = safe_lock(&wp_len_checker)._waiting_queue_len();
+            let len = safe_lock(&wp_len_checker)
+                .waiting_queue_len
+                .load(Ordering::SeqCst);
             //assert_ne!(len, 0, "Expected len to be > 0");
             println!("[len_checker] wait_que_len={len}");
             //thread::yield_now();
@@ -1052,7 +1063,7 @@ fn waiting_queue_len_race() {
                 thread_pool.submit(move || {
                     thread::sleep(Duration::from_micros(2));
                 });
-                let waiting = thread_pool._waiting_queue_len();
+                let waiting = thread_pool.waiting_queue_len.load(Ordering::SeqCst);
                 if waiting > max {
                     max = waiting;
                 }
@@ -1343,6 +1354,21 @@ fn test_min_workers_greater_than_max_workers() {
         "min_workers were not truncated to max_workers!"
     );
     wp.stop_wait();
+}
+
+#[test]
+fn test_wait_group_done_before_wait() {
+    let wg = WaitGroup::new_with_delta(1);
+    let twg = wg.clone();
+    let handle = thread::spawn(move || {
+        twg.done();
+    });
+    let sleep_for = Duration::from_millis(700);
+    let start = Instant::now();
+    thread::sleep(sleep_for);
+    wg.wait();
+    assert!(start.elapsed() > sleep_for);
+    let _ = handle.join();
 }
 
 #[test]

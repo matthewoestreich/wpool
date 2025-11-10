@@ -7,6 +7,7 @@
 //! ## Pool with only worker maximum
 //!
 //! ```rust
+//! use wpool::WPool;
 //! // At most 10 workers can run at once.
 //! let max_workers = 10;
 //!
@@ -14,10 +15,13 @@
 //!
 //! // Submit as many functions as you'd like.
 //! pool.submit(|| {
-//!   // Do some work.
+//!     // Do some work.
+//!     println!("hello from job 1");
 //! });
+//!
 //! pool.submit(|| {
-//!   // Do more work.
+//!     // Do more work.
+//!     println!("hello from job 2");
 //! });
 //!
 //! // Block until all workers are done working and
@@ -32,6 +36,8 @@
 //! **NOTE**: *We do not 'pre-spawn' workers!* Meaning, if you set `min_workers = 3` but your pool only ever creates 2 workers, then only 2 workers will ever exist (and should always be alive).
 //!
 //! ```rust
+//! use wpool::WPool;
+//!
 //! // At most 10 workers can run at once.
 //! let max_workers = 10;
 //! // At minimum up to 3 workers should always exist.
@@ -41,10 +47,13 @@
 //!
 //! // Submit as many functions as you'd like.
 //! pool.submit(|| {
-//!   // Do some work.
+//!     // Do some work.
+//!     println!("doing the thing")
 //! });
+//!
 //! pool.submit(|| {
-//!   // Do more work.
+//!     // Do more work.
+//!     println!("the thing is being done");
 //! });
 //!
 //! // Block until all workers are done working and
@@ -55,6 +64,11 @@
 //! ## Get a result out of submitted task
 //!
 //! ```rust
+//! use wpool::WPool;
+//! use std::thread;
+//! use std::time::Duration;
+//! use std::sync::mpsc;
+//!
 //! let max_workers = 2;
 //! let wp = WPool::new(max_workers);
 //! let (tx, rx) = mpsc::sync_channel::<u8>(0);
@@ -110,8 +124,6 @@ use std::{
     thread::{self, ThreadId},
 };
 
-use crate::channel::Receiver;
-
 /************************************* [PUBLIC] PanicInfo ********************************/
 
 /// `PanicInfo` displays panic information.
@@ -153,43 +165,6 @@ pub(crate) fn safe_lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     match m.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
-    }
-}
-
-/************************************* ThreadGuardian ************************************/
-
-/// ThreadGuardian sits in a worker thread to detect a panic within said thread.
-/// We use `impl Drop` to detect if `thread::panicking()` is true.
-/// If a panic has been detected, the ThreadGuardian instance will call the provided
-/// `FnOnce` to recover the panicked worker thread.
-pub(crate) struct ThreadGuardian {
-    thread_respawn_fn: Option<Box<dyn FnOnce() + Send + 'static>>,
-}
-
-impl ThreadGuardian {
-    pub(crate) fn new<F>(
-        wait_group: WaitGroup,
-        worker_receiver: Receiver<Signal>,
-        spawn_worker_fn: F,
-    ) -> Self
-    where
-        F: FnOnce(Signal, WaitGroup, Receiver<Signal>) + Send + 'static,
-    {
-        Self {
-            thread_respawn_fn: Some(Box::new(move || {
-                spawn_worker_fn(Signal::NewTask(Task::noop()), wait_group, worker_receiver)
-            })),
-        }
-    }
-}
-
-impl Drop for ThreadGuardian {
-    fn drop(&mut self) {
-        if thread::panicking()
-            && let Some(f) = self.thread_respawn_fn.take()
-        {
-            f();
-        }
     }
 }
 
@@ -328,8 +303,12 @@ impl WaitGroup {
     /// ## Combines `new()` and `.add(delta)` into a single call.
     /// ### Equivalent to:
     /// ```rust
-    /// let wg = WaitGroup::new();
-    /// wg.add(delta);
+    /// #[cfg(test)]
+    /// {
+    ///     use crate::WaitGroup;
+    ///     let wg = WaitGroup::new();
+    ///     wg.add(delta);
+    /// }
     /// ```
     pub(crate) fn new_with_delta(delta: usize) -> Self {
         Self {
@@ -425,5 +404,122 @@ impl<T> ThreadedDeque<T> {
         T: Clone,
     {
         safe_lock(&self.inner).front().cloned()
+    }
+}
+
+/************************************* ThreadGuardian ************************************/
+
+/// ThreadGuardian sits in a thread to detect a panic within said thread.
+/// We use `impl Drop` to detect if `thread::panicking()` is true.
+/// If a panic has been detected, the ThreadGuardian instance will call the provided
+/// `on_panic` handler.
+///
+/// You can pass any args you want to ThreadGuardian during instantiation, just wrap them
+/// in a tuple and you will have access to them in the `on_panic` method.
+///
+/// You must tie your instance to a variable that will be dropped when the thread ends!
+/// Even if it is not used, othrwise this will not work!
+///
+/// # Examples
+///
+/// ## Use any args in `on_panic`
+///
+/// ```rust
+/// #[cfg(test)]
+/// {
+///     use std::thread;
+///     use wpool::ThreadGuardian;
+///
+///     #[derive(Clone)]
+///     struct Foo { foo: u8 };
+///     #[derive(Clone)]
+///     struct Bar { bar: u8 };
+///     #[derive(Clone)]
+///     struct Baz { baz: u8 };
+///
+///     let foo = Foo { foo: 1 };
+///     let bar = Bar { bar: 2 };
+///     let baz = Baz { baz: 3 };
+///
+///     thread::spawn(move || {
+///         // Any args needed in `on_panic` should be passed to `new()` as a tuple.
+///         // The order of args is the same order you will receive them!
+///         let tg_args = (foo.clone(), bar.clone(), baz.clone());
+///     
+///         // Pass them to `ThreadGuardian::new()`:
+///         let tg = ThreadGuardian::new(tg_args);
+///     
+///         // Use them in `on_panic(...)` handler: (args are passed back to you in the same order we received them)
+///         tg.on_panic(|(foo, bar, baz)| {
+///             // Handle thread panic:
+///             println!("{foo:?} {bar:?} {baz:?}");
+///         });
+///     });
+/// }
+/// ```
+///
+/// ## Without args
+///
+/// ```rust
+/// #[cfg(test)]
+/// {
+///     use wpool::ThreadGuardian;
+///     // Pass empty tuple:
+///     let tg = ThreadGuardian::new(());
+///     // Underscore for args:
+///     tg.on_panic(|_| {
+///         println!("do work!");
+///     });
+/// }
+/// ```
+///
+/// ## Must tie instance to variable!
+///
+/// ```rust,ignore
+/// // This won't work:
+/// ThreadGuardian::new((...)).on_panic(|_| { ... });
+/// // You must tie your instance to a variable that is dropped
+/// // when the thread ends:
+/// let tg = ThreadGuardian::new((...));
+/// tg.on_panic(|_| { ... });
+/// ```
+pub(crate) struct ThreadGuardian<T>
+where
+    T: Clone + Send + 'static,
+{
+    args: T,
+    run_on_panic_fn: Mutex<Option<Box<dyn FnOnce() + Send + 'static>>>,
+}
+
+impl<T> ThreadGuardian<T>
+where
+    T: Clone + Send + 'static,
+{
+    pub(crate) fn new(args: T) -> Self {
+        Self {
+            args,
+            run_on_panic_fn: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn on_panic<F>(&self, handler: F)
+    where
+        F: FnOnce(T) + Send + 'static,
+    {
+        let args = self.args.clone();
+        *safe_lock(&self.run_on_panic_fn) = Some(Box::new(move || handler(args)));
+    }
+}
+
+impl<T> Drop for ThreadGuardian<T>
+where
+    T: Clone + Send + 'static,
+{
+    fn drop(&mut self) {
+        if thread::panicking()
+            && let Some(f) = safe_lock(&self.run_on_panic_fn).take()
+        {
+            f();
+        }
     }
 }

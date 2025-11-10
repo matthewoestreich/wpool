@@ -15,7 +15,9 @@
 //! ## With `WPool`
 //!
 //! ```rust
-//! use wpool::pacer::Pacer;
+//! use wpool::{WPool, pacer::Pacer};
+//! use std::time::Duration;
+//! use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 //!
 //! let at_pace = Duration::from_secs(1);
 //! let pacer = Pacer::new(at_pace);
@@ -40,6 +42,9 @@
 //!
 //! ```rust
 //! use wpool::{WPool, pacer::Pacer};
+//! use std::thread;
+//! use std::time::Duration;
+//! use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 //!
 //! let at_pace = Duration::from_secs(1);
 //! let pacer = Pacer::new(at_pace);
@@ -62,6 +67,10 @@
 //! By "regular functions", we mean functions not wrapped in `PacedFn`.
 //!
 //! ```rust
+//! use wpool::{WPool, pacer::Pacer};
+//! use std::time::{Duration, Instant};
+//! use std::sync::atomic::{Ordering, AtomicUsize};
+//!
 //! let delay = Duration::from_millis(50);
 //! let pacer = Pacer::new(delay);
 //! let counter = AtomicUsize::new(0);
@@ -93,6 +102,8 @@
 //! for _ in 0..num_calls {
 //!     not_a_paced_fn(&counter, &pacer);
 //! }
+//!
+//! pacer.stop();
 //!
 //! let elapsed = start.elapsed();
 //! let expected_runtime = delay * num_calls;

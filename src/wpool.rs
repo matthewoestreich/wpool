@@ -32,7 +32,7 @@ pub struct WPool {
     task_sender: Sender<Signal>,
     worker_count: Arc<AtomicUsize>,
     #[allow(dead_code)]
-    waiting_queue: ThreadedDeque<Signal>,
+    pub(crate) waiting_queue_len: Arc<AtomicUsize>,
 }
 
 impl WPool {
@@ -41,7 +41,7 @@ impl WPool {
         let panics = Arc::new(Mutex::new(Vec::new()));
         let status = Arc::new(AtomicU8::new(WPoolStatus::Running.as_u8()));
         let worker_count = Arc::new(AtomicUsize::new(0));
-        let waiting_queue = ThreadedDeque::new();
+        let waiting_queue_len = Arc::new(AtomicUsize::new(0));
         let worker_channel = bounded(0);
         let task_channel = unbounded();
         let is_dispatch_ready = WaitGroup::new_with_delta(1);
@@ -63,7 +63,7 @@ impl WPool {
             min_workers,
             Arc::clone(&status),
             Arc::clone(&worker_count),
-            waiting_queue.clone(),
+            Arc::clone(&waiting_queue_len),
             task_channel.clone_receiver(),
             worker_channel.clone(),
             is_dispatch_ready.clone(),
@@ -79,8 +79,8 @@ impl WPool {
             status,
             stop_once: Once::new(),
             task_sender: task_channel.clone_sender(),
+            waiting_queue_len,
             worker_count,
-            waiting_queue,
         }
     }
 
@@ -241,12 +241,6 @@ impl WPool {
         safe_lock(&self.panics).to_vec()
     }
 
-    /************************* Crate methods *****************************************/
-
-    pub(crate) fn _waiting_queue_len(&self) -> usize {
-        self.waiting_queue.len()
-    }
-
     /************************* Private methods ***************************************/
 
     /// `dispatch` starts our dispatcher thread. It is responsible for receiving
@@ -257,7 +251,7 @@ impl WPool {
         min_workers: usize,
         status: Arc<AtomicU8>,
         worker_count: Arc<AtomicUsize>,
-        waiting_queue: ThreadedDeque<Signal>,
+        waiting_queue_len: Arc<AtomicUsize>,
         task_receiver: Receiver<Signal>,
         worker_channel: Channel<Signal>,
         is_spawned: WaitGroup,
@@ -265,6 +259,8 @@ impl WPool {
         thread::spawn(move || {
             let mut is_idle = false;
             let wait_group = WaitGroup::new();
+            let waiting_queue = ThreadedDeque::new();
+
             // Set ready flag after thread has spawned but JUST prior to main loop.
             is_spawned.done();
 
@@ -273,6 +269,7 @@ impl WPool {
                 if !waiting_queue.is_empty() {
                     if !Self::process_waiting_queue(
                         &waiting_queue,
+                        &waiting_queue_len,
                         &task_receiver,
                         worker_channel.sender_ref(),
                     ) {
@@ -300,7 +297,9 @@ impl WPool {
 
                 // Got a signal. Process it by placing in wait queue or handing to worker.
                 if worker_count.load(Ordering::SeqCst) >= max_workers {
-                    waiting_queue.push_back(signal);
+                    let mut wq = waiting_queue.lock();
+                    wq.push_back(signal);
+                    waiting_queue_len.store(wq.len(), Ordering::SeqCst);
                 } else {
                     wait_group.add(1);
                     Self::spawn_worker(signal, wait_group.clone(), worker_channel.clone_receiver());
@@ -311,7 +310,11 @@ impl WPool {
 
             // If `stop_wait()` was called run tasks and waiting queue.
             if WPoolStatus::from_u8(status.load(Ordering::SeqCst)) == WPoolStatus::Stopped(true) {
-                Self::run_queued_tasks(&waiting_queue, worker_channel.sender_ref());
+                Self::run_queued_tasks(
+                    &waiting_queue,
+                    &waiting_queue_len,
+                    worker_channel.sender_ref(),
+                );
             }
 
             // Terminate workers as they become available.
@@ -331,12 +334,16 @@ impl WPool {
     /// signals directly to available workers.
     fn process_waiting_queue(
         waiting_queue: &ThreadedDeque<Signal>,
+        waiting_queue_len: &AtomicUsize,
         task_receiver: &Receiver<Signal>,
         worker_sender: &Sender<Signal>,
     ) -> bool {
         match task_receiver.try_recv() {
             Ok(signal) => {
-                waiting_queue.push_back(signal);
+                let mut wq = waiting_queue.lock();
+                wq.push_back(signal);
+                waiting_queue_len.store(wq.len(), Ordering::SeqCst);
+                drop(wq);
             }
             Err(TryRecvError::Empty) => {
                 // To prevent a race, lock deque while checking front + popping front.
@@ -347,6 +354,7 @@ impl WPool {
                     // Only pop off (modify) waitiing queue once we know the
                     // signal was successfully passed into the worker channel.
                     wq.pop_front();
+                    waiting_queue_len.store(wq.len(), Ordering::SeqCst);
                 }
                 drop(wq); // Drop the lock ASAP
             }
@@ -357,7 +365,11 @@ impl WPool {
     }
 
     /// Essentially drains the wait_queue.
-    fn run_queued_tasks(waiting_queue: &ThreadedDeque<Signal>, worker_sender: &Sender<Signal>) {
+    fn run_queued_tasks(
+        waiting_queue: &ThreadedDeque<Signal>,
+        waiting_queue_len: &AtomicUsize,
+        worker_sender: &Sender<Signal>,
+    ) {
         // Lock the entire wait queue for the entire duration of this process.
         let mut wq = waiting_queue.lock();
         while !wq.is_empty() {
@@ -368,6 +380,7 @@ impl WPool {
                 // Only pop off (modify) waitiing queue once we know the
                 // signal was successfully passed into the worker channel.
                 wq.pop_front();
+                waiting_queue_len.store(wq.len(), Ordering::SeqCst);
             }
         }
     }
@@ -376,11 +389,15 @@ impl WPool {
     /// a worker will timeout after an entire cycle of being idle. The idle timeout cycle is ~4 seconds.
     fn spawn_worker(signal: Signal, wait_group: WaitGroup, worker_receiver: Receiver<Signal>) {
         thread::spawn(move || {
-            let _tg = ThreadGuardian::new(
+            let tg = ThreadGuardian::new((
+                Signal::NewTask(Task::noop()),
                 wait_group.clone(),
                 worker_receiver.clone(),
-                Self::spawn_worker,
-            );
+            ));
+
+            tg.on_panic(|(signal, wait_group, worker_receiver)| {
+                Self::spawn_worker(signal, wait_group, worker_receiver);
+            });
 
             let mut signal_maybe = Some(signal);
             while signal_maybe.is_some() {
