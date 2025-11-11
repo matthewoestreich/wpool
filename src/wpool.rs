@@ -42,10 +42,10 @@ impl WPool {
         assert!(max_workers > 0, "max_workers == 0");
         assert!(max_workers >= min_workers, "min_workers > max_workers");
 
-        let panics = Arc::new(Mutex::new(Vec::new()));
-        let status = Arc::new(AtomicU8::new(WPoolStatus::Running.as_u8()));
-        let worker_count = Arc::new(AtomicUsize::new(0));
-        let waiting_queue_len = Arc::new(AtomicUsize::new(0));
+        let panics = Mutex::new(Vec::new()).into();
+        let status = AtomicU8::new(WPoolStatus::Running.as_u8()).into();
+        let worker_count = AtomicUsize::new(0).into();
+        let waiting_queue_len = AtomicUsize::new(0).into();
         let worker_channel = bounded(0);
         let task_channel = unbounded();
         let is_dispatch_ready = WaitGroup::new_with_delta(1);
@@ -68,12 +68,12 @@ impl WPool {
         );
 
         Self {
-            dispatch_handle: Mutex::new(Some(dispatch_handle)),
+            dispatch_handle: Some(dispatch_handle).into(),
             is_dispatch_ready,
             max_workers,
             min_workers,
             panics,
-            shutdown_lock: Mutex::new(unbounded()),
+            shutdown_lock: unbounded().into(),
             status,
             stop_once: Once::new(),
             task_sender: task_channel.clone_sender(),
@@ -696,20 +696,17 @@ impl WPool {
                 wait_group.clone(),
                 worker_receiver.clone(),
             ));
-
             tg.on_panic(|(signal, wait_group, worker_receiver)| {
                 Self::spawn_worker(signal, wait_group, worker_receiver);
             });
 
+            signal.confirm_submit();
             let mut signal_opt = Some(signal);
 
             while signal_opt.is_some() {
                 match signal_opt.take().expect("is_some()") {
                     Signal::Terminate => break,
-                    Signal::NewTask(task, confirmation) => {
-                        drop(safe_lock(&confirmation).take()); // Confirm submit.
-                        task.run();
-                    }
+                    Signal::NewTask(task, _) => task.run(),
                 }
                 signal_opt = match worker_receiver.recv() {
                     Ok(signal) => Some(signal),
