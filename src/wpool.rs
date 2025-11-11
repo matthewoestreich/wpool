@@ -565,8 +565,8 @@ impl WPool {
     ) -> thread::JoinHandle<()> {
         thread::spawn(move || {
             let mut is_idle = false;
-            let wait_group = WaitGroup::new();
             let mut waiting_queue = VecDeque::new();
+            let wait_group = WaitGroup::new();
 
             // Set ready flag after thread has spawned but JUST prior to main loop.
             is_spawned.done();
