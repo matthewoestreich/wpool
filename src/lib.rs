@@ -256,12 +256,11 @@ use std::{
 /// `PanicInfo` displays panic information.
 #[derive(Clone, Debug)]
 pub struct PanicInfo {
-    #[allow(dead_code)]
-    thread_id: ThreadId,
-    payload: Option<String>,
-    file: Option<String>,
-    line: Option<u32>,
-    column: Option<u32>,
+    pub thread_id: ThreadId,
+    pub payload: Option<String>,
+    pub file: Option<String>,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
 }
 
 impl From<&PanicHookInfo<'_>> for PanicInfo {
