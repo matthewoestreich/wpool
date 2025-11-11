@@ -345,17 +345,13 @@ impl fmt::Debug for WPoolStatus {
 
 #[derive(Clone)]
 pub(crate) enum Signal {
-    /// The Arc<Mutex<Option<SyncSender<()>>>> is meant for "confirmation", eg. confirming the signal has
-    /// either been given to a worker, or placed in the wait queue.
-    /// It is for whenever a user calls `submit_confirm()`.
-    /// If the Arc<Mutex<Option<SyncSender<()>>>> is Some, just drop it to confirm (unblocks the receiver).
     NewTask(Task, Arc<Mutex<Option<SyncSender<()>>>>),
     Terminate,
 }
 
 impl Signal {
     /// If the Signal is `Signal::NewTask(Task, Some(confirm));` then we take `Some(confirm)`
-    /// and drop it. Effectively sending "confirmation" to the receiving end (blocking).
+    /// and drop it. Effectively sending "confirmation" to the receiving end.
     /// ## This is the function body of `confirm_submit`
     /// ```rust,ignore
     /// if let Signal::NewTask(_, confirm) = self {
@@ -372,13 +368,15 @@ impl Signal {
 impl Display for Signal {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            Signal::NewTask(_, opt) => {
-                if safe_lock(opt).is_none() {
-                    write!(f, "Signal::NewTask(Task)")
+            Signal::NewTask(_, opt) => write!(
+                f,
+                "Signal::NewTask(Task{})",
+                if safe_lock(opt).is_some() {
+                    ", Confirm"
                 } else {
-                    write!(f, "Signal::NewTask(Task, Confirm)")
+                    ""
                 }
-            }
+            ),
             Signal::Terminate => write!(f, "Signal::Terminate"),
         }
     }

@@ -518,22 +518,6 @@ impl WPool {
 
     /************************* Private methods ***************************************/
 
-    fn shutdown(&self, wait: bool) {
-        self.stop_once.call_once(|| {
-            self.resume();
-            // Acquire lock so we can wait for any in-progress pauses.
-            let shutdown_lock = safe_lock(&self.shutdown_lock);
-            self.set_status(WPoolStatus::Stopped(wait));
-            drop(shutdown_lock);
-            // Close tasks channel.
-            self.task_sender.drop();
-        });
-
-        if let Some(handle) = safe_lock(&self.dispatch_handle).take() {
-            let _ = handle.join();
-        }
-    }
-
     /// Submit a Signal to the task channel.
     fn submit_signal(&self, signal: Signal) {
         if matches!(self.status(), WPoolStatus::Stopped(_)) {
@@ -548,6 +532,22 @@ impl WPool {
 
     fn set_status(&self, status: WPoolStatus) {
         self.status.store(status.as_u8(), Ordering::SeqCst);
+    }
+
+    fn shutdown(&self, wait: bool) {
+        self.stop_once.call_once(|| {
+            self.resume();
+            // Acquire lock so we can wait for any in-progress pauses.
+            let shutdown_lock = safe_lock(&self.shutdown_lock);
+            self.set_status(WPoolStatus::Stopped(wait));
+            drop(shutdown_lock);
+            // Close tasks channel.
+            self.task_sender.drop();
+        });
+
+        if let Some(handle) = safe_lock(&self.dispatch_handle).take() {
+            let _ = handle.join();
+        }
     }
 
     /************************* Private Static methods ********************************/
