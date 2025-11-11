@@ -208,8 +208,9 @@ impl WPool {
     where
         F: FnOnce() + Send + 'static,
     {
-        let t = Task::new(Box::new(task));
-        self.submit_signal(Signal::NewTask(t));
+        let t = Task::new(task);
+        let c = Mutex::new(None).into();
+        self.submit_signal(Signal::NewTask(t, c));
     }
 
     /// Enqueues the given function and blocks until it has been executed.
@@ -283,9 +284,10 @@ impl WPool {
         F: FnOnce() + Send + 'static,
     {
         let (tx, rx) = mpsc::sync_channel(0);
-        let t = Task::new(Box::new(task));
-        let s = Signal::NewTaskWithConfirmation(t, Some(tx));
-        self.submit_signal(s);
+        self.submit_signal(Signal::NewTask(
+            Task::new(task),
+            Mutex::new(Some(tx)).into(),
+        ));
         let _ = rx.recv();
     }
 
@@ -586,7 +588,7 @@ impl WPool {
                 }
 
                 // Get signal from task channel, handles killing idle workers.
-                let mut signal = match task_receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
+                let signal = match task_receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
                     Ok(signal) => signal,
                     Err(RecvTimeoutError::Timeout) => {
                         if is_idle
@@ -604,7 +606,7 @@ impl WPool {
 
                 // Got a signal. Process it by placing in wait queue or handing to worker.
                 if worker_count.load(Ordering::SeqCst) >= max_workers {
-                    Self::confirm_signal_if_needed(&mut signal);
+                    signal.confirm_submit();
                     waiting_queue.push_back(signal);
                     waiting_queue_len.store(waiting_queue.len(), Ordering::SeqCst);
                 } else {
@@ -690,7 +692,7 @@ impl WPool {
     fn spawn_worker(signal: Signal, wait_group: WaitGroup, worker_receiver: Receiver<Signal>) {
         thread::spawn(move || {
             let tg = ThreadGuardian::new((
-                Signal::NewTask(Task::noop()),
+                Signal::NewTask(Task::noop(), Mutex::new(None).into()),
                 wait_group.clone(),
                 worker_receiver.clone(),
             ));
@@ -699,17 +701,17 @@ impl WPool {
                 Self::spawn_worker(signal, wait_group, worker_receiver);
             });
 
-            let mut signal_maybe = Some(signal);
-            while signal_maybe.is_some() {
-                match signal_maybe.take().expect("is_some()") {
-                    Signal::NewTask(task) => task.run(),
-                    Signal::NewTaskWithConfirmation(task, confirm) => {
-                        drop(confirm);
+            let mut signal_opt = Some(signal);
+
+            while signal_opt.is_some() {
+                match signal_opt.take().expect("is_some()") {
+                    Signal::Terminate => break,
+                    Signal::NewTask(task, confirmation) => {
+                        drop(safe_lock(&confirmation).take()); // Confirm submit.
                         task.run();
                     }
-                    Signal::Terminate => break,
                 }
-                signal_maybe = match worker_receiver.recv() {
+                signal_opt = match worker_receiver.recv() {
                     Ok(signal) => Some(signal),
                     Err(_) => break,
                 }
@@ -717,14 +719,5 @@ impl WPool {
 
             wait_group.done();
         });
-    }
-
-    /// If `submit_confirm(...)` was called send confirmation, extract the task,
-    /// and wrap the extracted task in a plain NewTask.
-    fn confirm_signal_if_needed(signal: &mut Signal) {
-        if let Signal::NewTaskWithConfirmation(task, confirm) = signal {
-            drop(confirm.take());
-            *signal = Signal::NewTask(task.to_owned());
-        }
     }
 }

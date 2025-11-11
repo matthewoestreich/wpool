@@ -229,6 +229,7 @@
 //! // ]
 //! wp.stop_wait();
 //! ```
+//!
 #![allow(clippy::too_many_arguments)]
 #[cfg(test)]
 mod tests;
@@ -245,7 +246,7 @@ use std::{
     sync::{
         Arc, Condvar, Mutex, MutexGuard, Once,
         atomic::{AtomicUsize, Ordering},
-        mpsc,
+        mpsc::SyncSender,
     },
     thread::{self, ThreadId},
 };
@@ -344,18 +345,34 @@ impl fmt::Debug for WPoolStatus {
 
 #[derive(Clone)]
 pub(crate) enum Signal {
-    NewTask(Task),
-    // Blocks until the task is either assigned to a worker or queued.
-    // Drop the sender to "confirm".
-    NewTaskWithConfirmation(Task, Option<mpsc::SyncSender<()>>),
+    // The Arc<Mutex<Option<SyncSender<()>>>> is meant for "confirmation", eg. confirming the signal has
+    // either been given to a worker, or placed in the wait queue.
+    // It is for whenever a user calls `submit_confirm()`.
+    // If the Arc<Mutex<Option<SyncSender<()>>>> is Some, just drop it to confirm (unblocks the receiver).
+    NewTask(Task, Arc<Mutex<Option<SyncSender<()>>>>),
     Terminate,
+}
+
+impl Signal {
+    // If the Signal is `Signal::NewTask(Task, Some(confirm));` then we take `Some(confirm)`
+    // and drop it. Effectively sending "confirmation" to the receiving end (blocking).
+    pub(crate) fn confirm_submit(&self) {
+        if let Signal::NewTask(_, confirm) = self {
+            drop(safe_lock(confirm).take());
+        }
+    }
 }
 
 impl Display for Signal {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            Signal::NewTask(_) => write!(f, "Signal::NewTask(Task)"),
-            Signal::NewTaskWithConfirmation(..) => write!(f, "Signal::NewTaskWithConfirmation"),
+            Signal::NewTask(_, opt) => {
+                if safe_lock(opt).is_none() {
+                    write!(f, "Signal::NewTask(Task)")
+                } else {
+                    write!(f, "Signal::NewTask(Task, Confirm)")
+                }
+            }
             Signal::Terminate => write!(f, "Signal::Terminate"),
         }
     }
@@ -368,8 +385,6 @@ impl fmt::Debug for Signal {
 }
 
 /*********************************** Task ***********************************************/
-
-pub(crate) type TaskFn = Box<dyn FnOnce() + Send + 'static>;
 
 pub(crate) struct Task {
     inner: Arc<dyn Fn() + Send + Sync + 'static>,
@@ -384,7 +399,10 @@ impl Clone for Task {
 }
 
 impl Task {
-    pub fn new(f: TaskFn) -> Self {
+    pub fn new<F>(f: F) -> Self
+    where
+        F: FnOnce() + Send + 'static,
+    {
         let f = Mutex::new(Some(f));
         Self {
             inner: Arc::new(move || {
