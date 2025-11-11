@@ -357,7 +357,7 @@ impl Signal {
     /// If the Signal is `Signal::NewTask(Task, Some(confirm));` then we take `Some(confirm)`
     /// and drop it. Effectively sending "confirmation" to the receiving end (blocking).
     /// ## This is the function body of `confirm_submit`
-    /// ```rust
+    /// ```rust,ignore
     /// if let Signal::NewTask(_, confirm) = self {
     ///     drop(safe_lock(confirm).take());
     /// }
