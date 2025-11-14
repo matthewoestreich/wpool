@@ -237,3 +237,19 @@ println!("{:#?}", wp.get_workers_panic_info());
 // ]
 wp.stop_wait();
 ```
+
+</br></br>
+
+# Contributing
+
+## Tests
+
+**With `nextest`**
+
+Preferred.
+
+`cargo nextest run --lib`
+
+**With `cargo`**
+
+`cargo test --lib`

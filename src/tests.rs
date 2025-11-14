@@ -350,6 +350,7 @@ fn test_thread_guardian_multiple_panics_in_worker() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_get_workers_panic_info() {
     let wp = WPool::new(2);
 
