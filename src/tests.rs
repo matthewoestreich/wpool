@@ -1479,6 +1479,30 @@ fn test_wait_group_done_before_wait() {
 }
 
 #[test]
+fn test_time() {
+    let max_workers = 5;
+    let jobs = 50;
+    let wp = WPool::new(max_workers);
+    let counter = Arc::new(AtomicUsize::new(0));
+    for _ in 0..jobs {
+        let c = Arc::clone(&counter);
+        wp.submit(move || {
+            thread::sleep(Duration::from_millis(500));
+            c.fetch_add(1, Ordering::SeqCst);
+        });
+    }
+
+    wp.stop_wait();
+
+    assert_eq!(
+        jobs,
+        counter.load(Ordering::SeqCst),
+        "expected {jobs} got {}",
+        counter.load(Ordering::SeqCst)
+    );
+}
+
+#[test]
 fn test_wait_group_done_wait_race() {
     // Ensure there is not a race when calling done() before wait()
     run_test_with_timeout(Duration::from_secs(5), || {
