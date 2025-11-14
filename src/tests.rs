@@ -124,7 +124,6 @@ fn test_serial_test_sanity_2() {
 #[test]
 fn test_basic() {
     let p = WPool::new(3);
-    p.wait_ready();
 
     for _ in 0..3 {
         p.submit(|| {
@@ -133,21 +132,6 @@ fn test_basic() {
     }
 
     p.stop_wait();
-}
-
-#[test]
-fn test_wait_ready() {
-    let max_workers = 4;
-    let wp = WPool::new(max_workers);
-    wp.wait_ready();
-    for _ in 0..max_workers {
-        wp.submit(|| {
-            thread::sleep(Duration::from_millis(2));
-        });
-        // Does this cause anything?
-        wp.wait_ready();
-    }
-    wp.stop_wait();
 }
 
 #[test]
@@ -280,6 +264,32 @@ fn test_capture_example_in_readme() {
 
     wp.stop_wait();
     thread::sleep(Duration::from_secs(1)); // Idk why this test keeps being marked as leaky.
+}
+
+#[test]
+fn test_signal_cannot_be_confirmed_more_than_once() {
+    let (sender, _) = mpsc::sync_channel::<()>(1);
+    let signal = crate::Signal::NewTask(crate::Task::noop(), Mutex::new(Some(sender)).into());
+    signal.confirm_submit();
+    match &signal {
+        crate::Signal::NewTask(_, c) => {
+            assert!(
+                safe_lock(c).is_none(),
+                "expected confirmation, meaning, the option was `take()` so it should now be None."
+            );
+        }
+        _ => panic!("expected a Signal::NewTask"),
+    };
+    signal.confirm_submit();
+    match &signal {
+        crate::Signal::NewTask(_, c) => {
+            assert!(
+                safe_lock(c).is_none(),
+                "expected confirmation, meaning, the option was `take()` so it should now be None."
+            );
+        }
+        _ => panic!("expected a Signal::NewTask"),
+    };
 }
 
 #[test]
@@ -514,11 +524,11 @@ fn test_stop_abandoned_waiting_queue() {
 
         // let wait queue fill up
         work_ready.wait();
-        let mut wq_len = wp.waiting_queue_len.load(Ordering::SeqCst);
+        let mut wq_len = wp.waiting_queue_len();
         let max_iters = 100_000;
         let mut i = 0;
         while wq_len != num_jobs - max_workers && i < max_iters {
-            wq_len = wp.waiting_queue_len.load(Ordering::SeqCst);
+            wq_len = wp.waiting_queue_len();
             println!(
                 "wq_len={wq_len} | num_jobs - max_workers={}",
                 num_jobs - max_workers
@@ -530,7 +540,7 @@ fn test_stop_abandoned_waiting_queue() {
         releaser_chan.drop_sender();
         wp.stop();
         assert_eq!(
-            wp.waiting_queue_len.load(Ordering::SeqCst),
+            wp.waiting_queue_len(),
             num_jobs - max_workers,
             "Expected 0 jobs from wait queue to run after stop()"
         );
@@ -562,11 +572,11 @@ fn test_stop_wait_does_not_abandoned_waiting_queue() {
 
         // let wait queue fill up
         work_ready.wait();
-        let mut wq_len = wp.waiting_queue_len.load(Ordering::SeqCst);
+        let mut wq_len = wp.waiting_queue_len();
         let max_iters = 100_000; // Just incase, set a ceiling.
         let mut i = 0; // Just incase, set a ceiling.
         while wq_len != num_jobs - max_workers && i < max_iters {
-            wq_len = wp.waiting_queue_len.load(Ordering::SeqCst);
+            wq_len = wp.waiting_queue_len();
             println!(
                 "wq_len={wq_len} | num_jobs - max_workers={}",
                 num_jobs - max_workers
@@ -577,7 +587,7 @@ fn test_stop_wait_does_not_abandoned_waiting_queue() {
         // Release the hounds
         releaser_chan.drop_sender();
         wp.stop_wait();
-        let len = wp.waiting_queue_len.load(Ordering::SeqCst);
+        let len = wp.waiting_queue_len();
         assert_eq!(
             len, 0,
             "Expected waiting queue to be processed after calling stop_wait()! Instead, we have {len} items in wait queue!",
@@ -638,7 +648,7 @@ fn test_overflow() {
 
     // Now that the pool has exited, it is safe to inspect its waiting
     // queue without causing a race.
-    let wq_len = p.waiting_queue_len.load(Ordering::SeqCst);
+    let wq_len = p.waiting_queue_len();
     assert_eq!(
         wq_len, expected_len,
         "Expected waiting to queue to have len of '{expected_len}' but got '{wq_len}'"
@@ -649,7 +659,6 @@ fn test_overflow() {
 #[test]
 fn test_job_actually_ran() {
     let p = WPool::new(3);
-    p.wait_ready();
     let counter = Arc::new(AtomicUsize::new(0));
     let counter_clone = counter.clone();
 
@@ -930,14 +939,10 @@ fn test_pause() {
         _ => {}
     }
 
-    let c = wp.waiting_queue_len.load(Ordering::SeqCst);
+    let c = wp.waiting_queue_len();
     println!(">>> test_pause -> about to assert wq_count=1 || wq_count is {c}");
     // Check that task was enqueued
-    assert_eq!(
-        wp.waiting_queue_len.load(Ordering::SeqCst),
-        1,
-        "waiting queue size should be 1"
-    );
+    assert_eq!(wp.waiting_queue_len(), 1, "waiting queue size should be 1");
 
     println!("made it to stop");
     wp.stop();
@@ -1139,9 +1144,7 @@ fn test_wait_queue_len_race_2() {
             if let Err(TryRecvError::Disconnected) = stop_rx.try_recv() {
                 break;
             }
-            let len = safe_lock(&wp_len_checker)
-                .waiting_queue_len
-                .load(Ordering::SeqCst);
+            let len = safe_lock(&wp_len_checker).waiting_queue_len();
             //assert_ne!(len, 0, "Expected len to be > 0");
             println!("[len_checker] wait_que_len={len}");
             //thread::yield_now();
@@ -1179,7 +1182,7 @@ fn waiting_queue_len_race() {
                 thread_pool.submit(move || {
                     thread::sleep(Duration::from_micros(2));
                 });
-                let waiting = thread_pool.waiting_queue_len.load(Ordering::SeqCst);
+                let waiting = thread_pool.waiting_queue_len();
                 if waiting > max {
                     max = waiting;
                 }

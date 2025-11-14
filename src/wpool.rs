@@ -1,19 +1,19 @@
 use std::{
-    collections::VecDeque,
     panic::{self},
     sync::{
         Arc, Mutex, Once,
-        atomic::{AtomicU8, AtomicUsize, Ordering},
-        mpsc::{self, RecvTimeoutError, TryRecvError},
+        mpsc::{self},
     },
     thread,
     time::Duration,
 };
 
 use crate::{
-    PanicInfo, Signal, Task, ThreadGuardian, WPoolStatus, WaitGroup,
-    channel::{Channel, Receiver, Sender, bounded, unbounded},
+    PanicInfo, Signal, Task, WPoolStatus, WaitGroup,
+    channel::{Channel, Sender, unbounded},
+    dispatcher::Dispatcher,
     safe_lock,
+    shared::{self, State, get_pool_status, get_wait_queue_len, get_worker_count, set_pool_status},
 };
 
 pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -23,17 +23,13 @@ pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 /// so you can enqueue any number of tasks without waiting.
 pub struct WPool {
     dispatch_handle: Mutex<Option<thread::JoinHandle<()>>>,
-    is_dispatch_ready: WaitGroup,
     max_workers: usize,
     min_workers: usize,
     panics: Arc<Mutex<Vec<PanicInfo>>>,
     shutdown_lock: Mutex<Channel<()>>,
-    status: Arc<AtomicU8>,
     stop_once: Once,
     task_sender: Sender<Signal>,
-    worker_count: Arc<AtomicUsize>,
-    #[allow(dead_code)]
-    pub(crate) waiting_queue_len: Arc<AtomicUsize>,
+    state_manager: Sender<State>,
 }
 
 impl WPool {
@@ -43,12 +39,12 @@ impl WPool {
         assert!(max_workers >= min_workers, "min_workers > max_workers");
 
         let panics = Mutex::new(Vec::new()).into();
-        let status = AtomicU8::new(WPoolStatus::Running.as_u8()).into();
-        let worker_count = AtomicUsize::new(0).into();
-        let waiting_queue_len = AtomicUsize::new(0).into();
-        let worker_channel = bounded(0);
         let task_channel = unbounded();
-        let is_dispatch_ready = WaitGroup::new_with_delta(1);
+
+        let shared_channel = unbounded();
+        let _ = shared::Manager::spawn(shared_channel.clone_receiver());
+        let dispatcher = Dispatcher::new(max_workers, min_workers, task_channel.clone_receiver());
+        let dispatcher_handle = dispatcher.spawn(shared_channel.clone_sender());
 
         // Hook all panics.
         let panics_clone = Arc::clone(&panics);
@@ -56,29 +52,15 @@ impl WPool {
             safe_lock(&panics_clone).push(PanicInfo::from(info));
         }));
 
-        let dispatch_handle = Self::dispatch(
-            max_workers,
-            min_workers,
-            Arc::clone(&status),
-            Arc::clone(&worker_count),
-            Arc::clone(&waiting_queue_len),
-            task_channel.clone_receiver(),
-            worker_channel.clone(),
-            is_dispatch_ready.clone(),
-        );
-
         Self {
-            dispatch_handle: Some(dispatch_handle).into(),
-            is_dispatch_ready,
+            dispatch_handle: Some(dispatcher_handle).into(),
             max_workers,
             min_workers,
             panics,
             shutdown_lock: unbounded().into(),
-            status,
             stop_once: Once::new(),
             task_sender: task_channel.clone_sender(),
-            waiting_queue_len,
-            worker_count,
+            state_manager: shared_channel.clone_sender(),
         }
     }
 
@@ -189,7 +171,8 @@ impl WPool {
     /// ```
     ///
     pub fn worker_count(&self) -> usize {
-        self.worker_count.load(Ordering::SeqCst)
+        get_worker_count(&self.state_manager)
+        //self.worker_count.load(Ordering::SeqCst)
     }
 
     /// Enqueues the given function.
@@ -461,25 +444,6 @@ impl WPool {
         self.set_status(WPoolStatus::Running);
     }
 
-    /// Waits for dispatcher thread to spawn.
-    /// This is mostly used in tests but I figured it may be useful to expose to the public.
-    /// 99.9999999999% of the time you won't use this.
-    ///
-    /// ```rust
-    /// use wpool::WPool;
-    ///
-    /// let wp = WPool::new(2);
-    /// // Block until dispatch thread has spawned.
-    /// wp.wait_ready();
-    /// // Dispatch has confirmed spawn.
-    /// wp.submit(|| { /* ...work... */ });
-    /// wp.stop_wait();
-    /// ```
-    ///
-    pub fn wait_ready(&self) {
-        self.is_dispatch_ready.wait()
-    }
-
     /// Returns all PanicInfo for workers that have panicked.
     ///
     /// ```rust
@@ -516,6 +480,13 @@ impl WPool {
         safe_lock(&self.panics).to_vec()
     }
 
+    /************************* Crate methods *****************************************/
+
+    #[allow(dead_code)]
+    pub(crate) fn waiting_queue_len(&self) -> usize {
+        get_wait_queue_len(&self.state_manager)
+    }
+
     /************************* Private methods ***************************************/
 
     /// Submit a Signal to the task channel.
@@ -527,11 +498,11 @@ impl WPool {
     }
 
     fn status(&self) -> WPoolStatus {
-        WPoolStatus::from_u8(self.status.load(Ordering::Acquire))
+        get_pool_status(&self.state_manager)
     }
 
     fn set_status(&self, status: WPoolStatus) {
-        self.status.store(status.as_u8(), Ordering::SeqCst);
+        set_pool_status(&self.state_manager, status);
     }
 
     fn shutdown(&self, wait: bool) {
@@ -548,173 +519,5 @@ impl WPool {
         if let Some(handle) = safe_lock(&self.dispatch_handle).take() {
             let _ = handle.join();
         }
-    }
-
-    /************************* Private Static methods ********************************/
-
-    /// `dispatch` starts our dispatcher thread. It is responsible for receiving
-    /// tasks, dispatching tasks to workers, spawning workers, killing workers
-    /// during pool shutdown, and more.
-    fn dispatch(
-        max_workers: usize,
-        min_workers: usize,
-        status: Arc<AtomicU8>,
-        worker_count: Arc<AtomicUsize>,
-        waiting_queue_len: Arc<AtomicUsize>,
-        task_receiver: Receiver<Signal>,
-        worker_channel: Channel<Signal>,
-        is_spawned: WaitGroup,
-    ) -> thread::JoinHandle<()> {
-        thread::spawn(move || {
-            let mut is_idle = false;
-            let mut waiting_queue = VecDeque::new();
-            let wait_group = WaitGroup::new();
-
-            // Set ready flag after thread has spawned but JUST prior to main loop.
-            is_spawned.done();
-
-            loop {
-                // See `process_waiting_queue` comments for more info.
-                if !waiting_queue.is_empty() {
-                    if !Self::process_waiting_queue(
-                        &mut waiting_queue,
-                        &waiting_queue_len,
-                        &task_receiver,
-                        worker_channel.sender_ref(),
-                    ) {
-                        break;
-                    }
-                    continue;
-                }
-
-                // Get signal from task channel, handles killing idle workers.
-                let signal = match task_receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
-                    Ok(signal) => signal,
-                    Err(RecvTimeoutError::Timeout) => {
-                        if is_idle
-                            && worker_count.load(Ordering::SeqCst) > min_workers // Keep min workers alive.
-                            && worker_channel.try_send(Signal::Terminate).is_ok()
-                        {
-                            worker_count.fetch_sub(1, Ordering::SeqCst);
-                        }
-                        is_idle = true;
-                        // No signal, just loop.
-                        continue;
-                    }
-                    Err(_) => break,
-                };
-
-                // Got a signal. Process it by placing in wait queue or handing to worker.
-                if worker_count.load(Ordering::SeqCst) >= max_workers {
-                    signal.confirm_submit();
-                    waiting_queue.push_back(signal);
-                    waiting_queue_len.store(waiting_queue.len(), Ordering::SeqCst);
-                } else {
-                    wait_group.add(1);
-                    Self::spawn_worker(signal, wait_group.clone(), worker_channel.clone_receiver());
-                    worker_count.fetch_add(1, Ordering::SeqCst);
-                }
-                is_idle = false;
-            }
-
-            // If `stop_wait()` was called run tasks and waiting queue.
-            if WPoolStatus::from_u8(status.load(Ordering::SeqCst)) == WPoolStatus::Stopped(true) {
-                Self::run_queued_tasks(
-                    &mut waiting_queue,
-                    &waiting_queue_len,
-                    worker_channel.sender_ref(),
-                );
-            }
-
-            // Terminate workers as they become available.
-            for _ in 0..worker_count.load(Ordering::SeqCst) {
-                let _ = worker_channel.send(Signal::Terminate); // Blocking.
-                worker_count.fetch_sub(1, Ordering::SeqCst);
-            }
-
-            wait_group.wait();
-        })
-    }
-
-    /// Processes tasks within the waiting queue.
-    /// As long as the waiting queue isn't empty, incoming signals (on task channel)
-    /// are put into the waiting queue and signals to run are taken from the waiting
-    /// queue. Once the waiting queue is empty, then go back to submitting incoming
-    /// signals directly to available workers.
-    fn process_waiting_queue(
-        waiting_queue: &mut VecDeque<Signal>,
-        waiting_queue_len: &AtomicUsize,
-        task_receiver: &Receiver<Signal>,
-        worker_sender: &Sender<Signal>,
-    ) -> bool {
-        match task_receiver.try_recv() {
-            Ok(signal) => {
-                waiting_queue.push_back(signal);
-                waiting_queue_len.store(waiting_queue.len(), Ordering::SeqCst);
-            }
-            Err(TryRecvError::Empty) => {
-                if let Some(signal) = waiting_queue.front()
-                    && let Ok(_) = worker_sender.try_send(signal.clone())
-                {
-                    // Only pop off (modify) waitiing queue once we know the
-                    // signal was successfully passed into the worker channel.
-                    waiting_queue.pop_front();
-                    waiting_queue_len.store(waiting_queue.len(), Ordering::SeqCst);
-                }
-            }
-            // Task channel closed.
-            Err(_) => return false,
-        };
-        true
-    }
-
-    /// Essentially drains the wait_queue.
-    fn run_queued_tasks(
-        waiting_queue: &mut VecDeque<Signal>,
-        waiting_queue_len: &AtomicUsize,
-        worker_sender: &Sender<Signal>,
-    ) {
-        while !waiting_queue.is_empty() {
-            // Get a **reference** to the element at the front of waiting queue, if exists.
-            if let Some(signal) = waiting_queue.front()
-                && let Ok(_) = worker_sender.try_send(signal.clone())
-            {
-                // Only pop off (modify) waitiing queue once we know the
-                // signal was successfully passed into the worker channel.
-                waiting_queue.pop_front();
-                waiting_queue_len.store(waiting_queue.len(), Ordering::SeqCst);
-            }
-        }
-    }
-
-    /// `spawn_worker` spawns a new thread that acts as a worker. Unless the pool using `min_workers`,
-    /// a worker will timeout after an entire cycle of being idle. The idle timeout cycle is ~4 seconds.
-    fn spawn_worker(signal: Signal, wait_group: WaitGroup, worker_receiver: Receiver<Signal>) {
-        thread::spawn(move || {
-            let tg = ThreadGuardian::new((
-                Signal::NewTask(Task::noop(), Mutex::new(None).into()),
-                wait_group.clone(),
-                worker_receiver.clone(),
-            ));
-            tg.on_panic(|(signal, wait_group, worker_receiver)| {
-                Self::spawn_worker(signal, wait_group, worker_receiver);
-            });
-
-            signal.confirm_submit();
-            let mut signal_opt = Some(signal);
-
-            while signal_opt.is_some() {
-                match signal_opt.take().expect("is_some()") {
-                    Signal::Terminate => break,
-                    Signal::NewTask(task, _) => task.run(),
-                }
-                signal_opt = match worker_receiver.recv() {
-                    Ok(signal) => Some(signal),
-                    Err(_) => break,
-                }
-            }
-
-            wait_group.done();
-        });
     }
 }

@@ -235,6 +235,8 @@
 mod tests;
 
 mod channel;
+mod dispatcher;
+mod shared;
 mod wpool;
 
 pub mod pacer;
@@ -358,8 +360,10 @@ impl Signal {
     /// }
     /// ```
     pub(crate) fn confirm_submit(&self) {
-        if let Signal::NewTask(_, confirm) = self {
-            drop(safe_lock(confirm).take());
+        if let Signal::NewTask(_, confirm) = self
+            && let Some(confirmation) = safe_lock(confirm).take()
+        {
+            drop(confirmation);
         }
     }
 }
