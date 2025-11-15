@@ -33,7 +33,6 @@ impl Dispatcher {
     }
 
     pub(crate) fn spawn(&self, state_sender: Sender<State>) -> thread::JoinHandle<()> {
-        // External state
         let max_workers = self.max_workers;
         let min_workers = self.min_workers;
         let task_receiver = self.task_receiver.clone();
