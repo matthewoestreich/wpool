@@ -9,11 +9,10 @@ use std::{
 };
 
 use crate::{
-    PanicInfo, Signal, Task, WPoolStatus, WaitGroup,
+    Action, PanicInfo, Signal, State, StateManager, Task, WPoolStatus, WaitGroup,
     channel::{Channel, Sender, unbounded},
     dispatcher::Dispatcher,
     safe_lock,
-    shared::{self, State, get_pool_status, get_wait_queue_len, get_worker_count, set_pool_status},
 };
 
 pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -41,10 +40,10 @@ impl WPool {
         let panics = Mutex::new(Vec::new()).into();
         let task_channel = unbounded();
 
-        let shared_channel = unbounded();
-        let _ = shared::Manager::spawn(shared_channel.clone_receiver());
+        let state_channel = unbounded();
+        StateManager::spawn(state_channel.clone_receiver());
         let dispatcher = Dispatcher::new(max_workers, min_workers, task_channel.clone_receiver());
-        let dispatcher_handle = dispatcher.spawn(shared_channel.clone_sender());
+        let dispatcher_handle = dispatcher.spawn(state_channel.clone_sender());
 
         // Hook all panics.
         let panics_clone = Arc::clone(&panics);
@@ -60,7 +59,7 @@ impl WPool {
             shutdown_lock: unbounded().into(),
             stop_once: Once::new(),
             task_sender: task_channel.clone_sender(),
-            state_manager: shared_channel.clone_sender(),
+            state_manager: state_channel.clone_sender(),
         }
     }
 
@@ -171,8 +170,7 @@ impl WPool {
     /// ```
     ///
     pub fn worker_count(&self) -> usize {
-        get_worker_count(&self.state_manager)
-        //self.worker_count.load(Ordering::SeqCst)
+        get_state!(WorkerCount, &self.state_manager)
     }
 
     /// Enqueues the given function.
@@ -484,7 +482,7 @@ impl WPool {
 
     #[allow(dead_code)]
     pub(crate) fn waiting_queue_len(&self) -> usize {
-        get_wait_queue_len(&self.state_manager)
+        get_state!(WaitingQueueLength, &self.state_manager)
     }
 
     /************************* Private methods ***************************************/
@@ -498,11 +496,15 @@ impl WPool {
     }
 
     fn status(&self) -> WPoolStatus {
-        get_pool_status(&self.state_manager)
+        WPoolStatus::from_u8(get_state!(PoolStatus, &self.state_manager))
     }
 
     fn set_status(&self, status: WPoolStatus) {
-        set_pool_status(&self.state_manager, status);
+        set_state!(
+            PoolStatus,
+            Action::Store(status.as_u8()),
+            &self.state_manager
+        );
     }
 
     fn shutdown(&self, wait: bool) {

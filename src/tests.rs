@@ -17,6 +17,29 @@ use crate::{
     wpool::{WORKER_IDLE_TIMEOUT, WPool},
 };
 
+fn detect_leaky_threads<F>(f: F)
+where
+    F: FnOnce() + UnwindSafe,
+{
+    use thread_count::thread_count;
+    let before = thread_count().unwrap().get() - 2;
+    let result = std::panic::catch_unwind(f);
+    let after = thread_count().unwrap().get() - 2;
+    println!("before={before}, after={after}");
+    if before != 0 {
+        panic!("STARTED WITH UNEXPECTED THREADS!");
+    }
+    if before < after {
+        panic!(
+            "[LEAK DETECTED] expected to end with as many threads running as when we started. started with {before}, ended with {after}"
+        );
+    }
+    if let Err(err) = result {
+        panic!("ERRRRRRRORRRRRRR = {err:?}");
+        //std::panic::resume_unwind(err);
+    }
+}
+
 // Runs a test `n_times` in a row.
 // failure_threshold : If this many runs fail this test willl fail. If 'failure_threshold' = 2, if 3 jobs fail, this job fails.
 fn run_test_n_times<F>(n_times: usize, failure_threshold: usize, log_job_info: bool, test_fn: F)
@@ -124,13 +147,11 @@ fn test_serial_test_sanity_2() {
 #[test]
 fn test_basic() {
     let p = WPool::new(3);
-
     for _ in 0..3 {
         p.submit(|| {
             thread::sleep(Duration::from_millis(100));
         });
     }
-
     p.stop_wait();
 }
 

@@ -1,1 +1,3 @@
-fn main() {}
+fn main() {
+    let _wp = wpool::WPool::new(19);
+}
