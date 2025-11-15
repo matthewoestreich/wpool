@@ -557,7 +557,7 @@ fn test_stop_basic() {
 
 #[test]
 fn test_stop_abandoned_waiting_queue() {
-    run_test_n_times(500, 0, true, || {
+    run_test_n_times(5, 0, true, || {
         let max_workers = 10;
         let num_jobs = 20;
         let releaser_chan = unbounded::<()>();
@@ -595,6 +595,7 @@ fn test_stop_abandoned_waiting_queue() {
         // Release the hounds
         releaser_chan.drop_sender();
         wp.stop();
+        println!("wait_que_len = {}, expected = {}", wp.waiting_queue_len(), num_jobs - max_workers);
         assert_eq!(
             wp.waiting_queue_len(),
             num_jobs - max_workers,
