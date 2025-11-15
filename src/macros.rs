@@ -44,19 +44,19 @@ macro_rules! define_stats {
                     $(
                         State::$TypeName(m) => match m {
                             StateMsg::Get(reply) => {
-                                let v = self.$field.load(Ordering::SeqCst);
-                                let _ = reply.send(v);
+                                    let v = self.$field.load(Ordering::SeqCst);
+                                    let _ = reply.send(v);
                             },
-                        StateMsg::Set(action) => match action {
-                            Action::Increment => {
-                                self.$field.fetch_add(1, Ordering::SeqCst);
-                            },
-                            Action::Decrement => {
-                                self.$field.fetch_sub(1, Ordering::SeqCst);
-                            },
-                            Action::Store(val) => {
-                                self.$field.store(val, Ordering::SeqCst);
-                            },
+                            StateMsg::Set(action) => match action {
+                                Action::Increment => {
+                                    self.$field.fetch_add(1, Ordering::SeqCst);
+                                },
+                                Action::Decrement => {
+                                    self.$field.fetch_sub(1, Ordering::SeqCst);
+                                },
+                                Action::Store(val) => {
+                                    self.$field.store(val, Ordering::SeqCst);
+                                },
                             },
                         },
                     )*
