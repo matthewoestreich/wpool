@@ -453,9 +453,7 @@ impl WPool {
     /// use wpool::WPool;
     ///
     /// let wp = WPool::new(3);
-    /// wp.submit(|| panic!("something went wrong!"));
-    /// // Wait for currently running jobs to finish.
-    /// wp.pause();
+    /// wp.submit_confirm(|| panic!("something went wrong!"));
     /// println!("{:#?}", wp.get_workers_panic_info());
     /// // [
     /// //     PanicInfo {

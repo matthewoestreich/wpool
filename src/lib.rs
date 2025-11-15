@@ -107,6 +107,8 @@
 //!         println!("job {i}");
 //!     });
 //! }
+//!
+//! wp.stop_wait();
 //! ```
 //!
 //! ## Wait for Submission to Execute
