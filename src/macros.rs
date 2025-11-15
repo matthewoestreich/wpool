@@ -48,15 +48,15 @@ macro_rules! define_stats {
                                 let _ = reply.send(v);
                             },
                         StateMsg::Set(action) => match action {
-                                Action::Increment => {
-                                    self.$field.fetch_add(1, Ordering::SeqCst);
-                                },
-                                Action::Decrement => {
-                                    self.$field.fetch_sub(1, Ordering::SeqCst);
-                                },
-                                Action::Store(val) => {
-                                    self.$field.store(val, Ordering::SeqCst);
-                                },
+                            Action::Increment => {
+                                self.$field.fetch_add(1, Ordering::SeqCst);
+                            },
+                            Action::Decrement => {
+                                self.$field.fetch_sub(1, Ordering::SeqCst);
+                            },
+                            Action::Store(val) => {
+                                self.$field.store(val, Ordering::SeqCst);
+                            },
                             },
                         },
                     )*
