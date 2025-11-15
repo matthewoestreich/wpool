@@ -653,7 +653,7 @@ fn test_overflow() {
         p.submit(move || {
             thread_ready.done();
             let _ = thread_release_receiver.recv();
-            thread::sleep(Duration::from_millis(1));
+            thread::sleep(Duration::from_millis(2));
         });
     }
 
