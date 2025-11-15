@@ -557,7 +557,7 @@ fn test_stop_basic() {
 
 #[test]
 fn test_stop_abandoned_waiting_queue() {
-    run_test_n_times(500, 0, false, || {
+    run_test_n_times(500, 0, true, || {
         let max_workers = 10;
         let num_jobs = 20;
         let releaser_chan = unbounded::<()>();
