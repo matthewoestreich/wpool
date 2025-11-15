@@ -1,0 +1,227 @@
+running 1 test
+wpool() -> submit_confirm -> ab to submit signal
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning WPoolStatus::Running
+wpool() -> submit_confirm -> ab to block waiting for confirm
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning 0
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning None
+Signal -> confirm_submit -> dropping sender
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+wpool() -> confirm_sender -> got confirmation, unblocking
+>> query_state -> from closure, sent success
+[[test_submit_confirm]] -> in loop ab to call `wp.worker_count()`
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> end -> returning 0
+    query_state -> DONE sending query to manager
+    query_state -> end -> returning 1
+[[test_submit_confirm]] -> ok : got worker count, on iteration 1
+>> query_state -> from closure, sent success
+wpool() -> submit_confirm -> ab to submit signal
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning WPoolStatus::Running
+wpool() -> submit_confirm -> ab to block waiting for confirm
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning 1
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning None
+Signal -> confirm_submit -> dropping sender
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+wpool() -> confirm_sender -> got confirmation, unblocking
+>> query_state -> from closure, sent success
+    query_state -> end -> returning 1
+[[test_submit_confirm]] -> in loop ab to call `wp.worker_count()`
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning 2
+[[test_submit_confirm]] -> ok : got worker count, on iteration 2
+wpool() -> submit_confirm -> ab to submit signal
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning WPoolStatus::Running
+wpool() -> submit_confirm -> ab to block waiting for confirm
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning 2
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+Signal -> confirm_submit -> dropping sender
+>> query_state -> from closure, sent success
+    query_state -> end -> returning None
+  query_state -> start
+    query_state -> sending query to manager
+wpool() -> confirm_sender -> got confirmation, unblocking
+[[test_submit_confirm]] -> in loop ab to call `wp.worker_count()`
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+    query_state -> DONE sending query to manager
+    query_state -> end -> returning 2
+>> query_state -> from closure, sent success
+>> query_state -> from closure, sent success
+    query_state -> end -> returning 3
+[[test_submit_confirm]] -> ok : got worker count, on iteration 3
+wpool() -> submit_confirm -> ab to submit signal
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning WPoolStatus::Running
+wpool() -> submit_confirm -> ab to block waiting for confirm
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning 3
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning None
+  query_state -> start
+Signal -> confirm_submit -> dropping sender
+    query_state -> sending query to manager
+wpool() -> confirm_sender -> got confirmation, unblocking
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+[[test_submit_confirm]] -> in loop ab to call `wp.worker_count()`
+  query_state -> start
+    query_state -> end -> returning 3
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning 4
+[[test_submit_confirm]] -> ok : got worker count, on iteration 4
+wpool() -> submit_confirm -> ab to submit signal
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning WPoolStatus::Running
+wpool() -> submit_confirm -> ab to block waiting for confirm
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning 4
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning None
+Signal -> confirm_submit -> dropping sender
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+wpool() -> confirm_sender -> got confirmation, unblocking
+[[test_submit_confirm]] -> in loop ab to call `wp.worker_count()`
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning 4
+    query_state -> end -> returning 5
+>> query_state -> from closure, sent success
+[[test_submit_confirm]] -> ok : got worker count, on iteration 5
+[[test_submit_confirm]] -> out of loop
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning 5
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning WPoolStatus::Running
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning ()
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning WPoolStatus::Stopped(wait=true)
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning 5
+job 1 exiting
+job 3 exiting
+job 2 exiting
+job 4 exiting
+  query_state -> start
+    query_state -> sending query to manager
+job 5 exiting
+    query_state -> DONE sending query to manager
+    query_state -> end -> returning 5
+>> query_state -> from closure, sent success
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning 4
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning 3
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning 2
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning 1
+dispatcher() -> exiting thread
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning 0
+[[test_submit_confirm]] -> done
+  query_state -> start
+    query_state -> sending query to manager
+    query_state -> DONE sending query to manager
+>> query_state -> from closure, sent success
+    query_state -> end -> returning ()
+test tests::test_submit_confirm ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 56 filtered out; finished in 1.01s

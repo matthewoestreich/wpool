@@ -231,15 +231,12 @@
 //! ```
 //!
 #![allow(clippy::too_many_arguments)]
-
-#[macro_use]
-mod macros;
-
 #[cfg(test)]
 mod tests;
 
 mod channel;
 mod dispatcher;
+mod state;
 mod wpool;
 
 pub mod pacer;
@@ -251,25 +248,11 @@ use std::{
     sync::{
         Arc, Condvar, Mutex, MutexGuard, Once,
         atomic::{AtomicUsize, Ordering},
-        mpsc::SyncSender,
     },
     thread::{self, ThreadId},
 };
 
-/*---------------------------------------------------------------------------------------*/
-/**************** Lock-free shared state macro *******************************************/
-/*---------------------------------------------------------------------------------------*/
-/**************** [ADD]: to add new shared state, just add a new line,    ****************/
-/****************        but it must be a type that also has `Atomic*` type! *************/
-/*---------------------------------------------------------------------------------------*/
-/**************** [USAGE]: `get_state!` and `set_state!` macros with this ****************/
-/*---------------------------------------------------------------------------------------*/
-define_stats! {
-    WorkerCount        => worker_count: usize,
-    WaitingQueueLength => waiting_queue_length: usize,
-    PoolStatus         => pool_status: u8,
-/*  ExampleNewState    => example_new_state: i128, // <-- `i128` has an `AtomicI128` equivalent! */
-}
+use crate::channel::Sender;
 
 /************************************* [PUBLIC] PanicInfo ********************************/
 
@@ -301,31 +284,6 @@ impl From<&PanicHookInfo<'_>> for PanicInfo {
 
         this.payload = info.payload_as_str().map(|s| s.to_string());
         this
-    }
-}
-
-/************************************* Shared State Manager ******************************/
-
-pub(crate) struct StateManager {
-    #[allow(dead_code)]
-    handle: Option<thread::JoinHandle<()>>,
-}
-
-impl StateManager {
-    pub(crate) fn spawn(rx: Receiver<State>) -> Self {
-        // Shared state
-        let inner = Inner::new();
-
-        // Spawn the manager thread
-        let handle = thread::spawn(move || {
-            while let Ok(msg) = rx.recv() {
-                inner.handle(msg);
-            }
-        });
-
-        Self {
-            handle: Some(handle),
-        }
     }
 }
 
@@ -386,11 +344,11 @@ impl fmt::Debug for WPoolStatus {
 }
 
 pub(crate) trait AsWPoolStatus {
-    fn as_wpool_status(&self) -> WPoolStatus;
+    fn as_enum(&self) -> WPoolStatus;
 }
 
 impl AsWPoolStatus for u8 {
-    fn as_wpool_status(&self) -> WPoolStatus {
+    fn as_enum(&self) -> WPoolStatus {
         WPoolStatus::from_u8(*self)
     }
 }
@@ -399,7 +357,7 @@ impl AsWPoolStatus for u8 {
 
 #[derive(Clone)]
 pub(crate) enum Signal {
-    NewTask(Task, Arc<Mutex<Option<SyncSender<()>>>>),
+    NewTask(Task, Arc<Mutex<Option<Sender<()>>>>),
     Terminate,
 }
 
@@ -416,8 +374,17 @@ impl Signal {
         if let Signal::NewTask(_, confirm) = self
             && let Some(confirmation) = safe_lock(confirm).take()
         {
-            drop(confirmation);
+            println!("Signal -> confirm_submit -> dropping sender");
+            confirmation.drop();
         }
+    }
+
+    pub(crate) fn take_confirm(&self) -> Option<Sender<()>> {
+        println!("Signal -> take_confirm -> start");
+        if let Signal::NewTask(_, confirm) = self {
+            return safe_lock(confirm).take();
+        }
+        None
     }
 }
 

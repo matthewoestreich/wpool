@@ -2,14 +2,17 @@ use std::{
     collections::VecDeque,
     sync::{
         Mutex,
+        atomic::Ordering,
         mpsc::{RecvTimeoutError, TryRecvError},
     },
-    thread,
+    thread::{self},
 };
 
 use crate::{
-    Action, AsWPoolStatus, Signal, State, Task, ThreadGuardian, WPoolStatus, WaitGroup,
+    AsWPoolStatus, Signal, Task, ThreadGuardian, WPoolStatus, WaitGroup,
     channel::{Receiver, Sender, bounded},
+    safe_lock,
+    state::{self, query_state},
     wpool::WORKER_IDLE_TIMEOUT,
 };
 
@@ -32,7 +35,7 @@ impl Dispatcher {
         }
     }
 
-    pub(crate) fn spawn(&self, state_sender: Sender<State>) -> thread::JoinHandle<()> {
+    pub(crate) fn spawn(&self, state_sender: Sender<state::Query>) -> thread::JoinHandle<()> {
         let max_workers = self.max_workers;
         let min_workers = self.min_workers;
         let task_receiver = self.task_receiver.clone();
@@ -62,10 +65,12 @@ impl Dispatcher {
                     Ok(signal) => signal,
                     Err(RecvTimeoutError::Timeout) => {
                         if is_idle
-                            && get_state!(WorkerCount, state_sender) > min_workers // Keep min workers alive.
+                            && query_state(&state_sender, |state| state.worker_count.load(Ordering::SeqCst)) > min_workers // Keep min workers alive.
                             && worker_channel.try_send(Signal::Terminate).is_ok()
                         {
-                            set_state!(WorkerCount, Action::Decrement, state_sender);
+                            query_state(&state_sender, |state| {
+                                state.worker_count.fetch_sub(1, Ordering::SeqCst)
+                            });
                         }
                         is_idle = true;
                         // No signal, just loop.
@@ -74,25 +79,39 @@ impl Dispatcher {
                     Err(_) => break,
                 };
 
+                let confirmation = signal.take_confirm();
+
                 // Got a signal. Process it by placing in wait queue or handing to worker.
-                if get_state!(WorkerCount, state_sender) >= max_workers {
-                    signal.confirm_submit();
+                if query_state(&state_sender, |state| {
+                    state.worker_count.load(Ordering::SeqCst)
+                }) >= max_workers
+                {
                     waiting_queue.push_back(signal);
-                    set_state!(
-                        WaitingQueueLength,
-                        Action::Store(waiting_queue.len()),
-                        state_sender
-                    );
+                    let len = waiting_queue.len();
+                    query_state(&state_sender, move |state| {
+                        state.waiting_queue_length.store(len, Ordering::SeqCst);
+                    });
                 } else {
                     wait_group.add(1);
-                    Self::spawn_worker(signal, wait_group.clone(), worker_channel.clone_receiver());
-                    set_state!(WorkerCount, Action::Increment, state_sender);
+                    Self::spawn_worker(
+                        signal,
+                        wait_group.clone(),
+                        worker_channel.clone_receiver(),
+                        state_sender.clone(),
+                    );
+                    query_state(&state_sender, |state| {
+                        state.worker_count.fetch_add(1, Ordering::SeqCst);
+                    });
                 }
+
+                confirmation.unwrap().drop();
                 is_idle = false;
             }
 
             // If `stop_wait()` was called run tasks and waiting queue.
-            if get_state!(PoolStatus, state_sender).as_wpool_status() == WPoolStatus::Stopped(true)
+            if query_state(&state_sender, |state| {
+                state.pool_status.load(Ordering::SeqCst).as_enum()
+            }) == WPoolStatus::Stopped(true)
             {
                 Self::run_queued_tasks(
                     &mut waiting_queue,
@@ -102,12 +121,17 @@ impl Dispatcher {
             }
 
             // Terminate workers as they become available.
-            for _ in 0..get_state!(WorkerCount, state_sender) {
+            for _ in 0..query_state(&state_sender, |state| {
+                state.worker_count.load(Ordering::SeqCst)
+            }) {
                 let _ = worker_channel.send(Signal::Terminate); // Blocking.
-                set_state!(WorkerCount, Action::Decrement, state_sender);
+                query_state(&state_sender, |state| {
+                    state.worker_count.fetch_sub(1, Ordering::SeqCst);
+                });
             }
 
             wait_group.wait();
+            println!("dispatcher() -> exiting thread");
         })
     }
 
@@ -118,18 +142,17 @@ impl Dispatcher {
     /// signals directly to available workers.
     fn process_waiting_queue(
         waiting_queue: &mut VecDeque<Signal>,
-        state_manager: &Sender<State>,
+        state_manager: &Sender<state::Query>,
         task_receiver: &Receiver<Signal>,
         worker_sender: &Sender<Signal>,
     ) -> bool {
         match task_receiver.try_recv() {
             Ok(signal) => {
                 waiting_queue.push_back(signal);
-                set_state!(
-                    WaitingQueueLength,
-                    Action::Store(waiting_queue.len()),
-                    state_manager
-                );
+                let len = waiting_queue.len();
+                query_state(state_manager, move |state| {
+                    state.waiting_queue_length.store(len, Ordering::SeqCst)
+                });
             }
             Err(TryRecvError::Empty) => {
                 if let Some(signal) = waiting_queue.front()
@@ -138,11 +161,10 @@ impl Dispatcher {
                     // Only pop off (modify) waitiing queue once we know the
                     // signal was successfully passed into the worker channel.
                     waiting_queue.pop_front();
-                    set_state!(
-                        WaitingQueueLength,
-                        Action::Store(waiting_queue.len()),
-                        state_manager
-                    );
+                    let len = waiting_queue.len();
+                    query_state(state_manager, move |state| {
+                        state.waiting_queue_length.store(len, Ordering::SeqCst)
+                    });
                 }
             }
             // Task channel closed.
@@ -154,7 +176,7 @@ impl Dispatcher {
     /// Essentially drains the wait_queue.
     fn run_queued_tasks(
         waiting_queue: &mut VecDeque<Signal>,
-        state_manager: &Sender<State>,
+        state_manager: &Sender<state::Query>,
         worker_sender: &Sender<Signal>,
     ) {
         while !waiting_queue.is_empty() {
@@ -165,29 +187,34 @@ impl Dispatcher {
                 // Only pop off (modify) waitiing queue once we know the
                 // signal was successfully passed into the worker channel.
                 waiting_queue.pop_front();
-                set_state!(
-                    WaitingQueueLength,
-                    Action::Store(waiting_queue.len()),
-                    state_manager
-                );
+                let len = waiting_queue.len();
+                query_state(state_manager, move |state| {
+                    state.waiting_queue_length.store(len, Ordering::SeqCst)
+                });
             }
         }
     }
 
     /// `spawn_worker` spawns a new thread that acts as a worker. Unless the pool using `min_workers`,
     /// a worker will timeout after an entire cycle of being idle. The idle timeout cycle is ~4 seconds.
-    fn spawn_worker(signal: Signal, wait_group: WaitGroup, worker_receiver: Receiver<Signal>) {
-        thread::spawn(move || {
+    fn spawn_worker(
+        signal: Signal,
+        wait_group: WaitGroup,
+        worker_receiver: Receiver<Signal>,
+        state_sender: Sender<state::Query>,
+    ) {
+        let state_sender_clone = state_sender.clone();
+        let handle = thread::spawn(move || {
             let tg = ThreadGuardian::new((
                 Signal::NewTask(Task::noop(), Mutex::new(None).into()),
                 wait_group.clone(),
                 worker_receiver.clone(),
+                state_sender_clone,
             ));
-            tg.on_panic(|(signal, wait_group, worker_receiver)| {
-                Self::spawn_worker(signal, wait_group, worker_receiver);
+            tg.on_panic(|(signal, wait_group, worker_receiver, state_sender)| {
+                Self::spawn_worker(signal, wait_group, worker_receiver, state_sender);
             });
 
-            signal.confirm_submit();
             let mut signal_opt = Some(signal);
 
             while signal_opt.is_some() {
@@ -202,6 +229,10 @@ impl Dispatcher {
             }
 
             wait_group.done();
+        });
+
+        query_state(&state_sender, |state| {
+            safe_lock(&state.worker_handles).insert(handle.thread().id(), Some(handle));
         });
     }
 }

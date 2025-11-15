@@ -2,6 +2,7 @@ use std::{
     panic::{self},
     sync::{
         Arc, Mutex, Once,
+        atomic::Ordering,
         mpsc::{self},
     },
     thread,
@@ -9,10 +10,11 @@ use std::{
 };
 
 use crate::{
-    Action, PanicInfo, Signal, State, StateManager, Task, WPoolStatus, WaitGroup,
-    channel::{Channel, Sender, unbounded},
+    AsWPoolStatus, PanicInfo, Signal, Task, WPoolStatus, WaitGroup,
+    channel::{Channel, Sender, bounded, unbounded},
     dispatcher::Dispatcher,
     safe_lock,
+    state::{self, StateManager, query_state},
 };
 
 pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -28,7 +30,8 @@ pub struct WPool {
     shutdown_lock: Mutex<Channel<()>>,
     stop_once: Once,
     task_sender: Sender<Signal>,
-    state_manager: Sender<State>,
+    state_manager_handle: Mutex<Option<thread::JoinHandle<()>>>,
+    state_sender: Sender<state::Query>,
 }
 
 impl WPool {
@@ -41,8 +44,10 @@ impl WPool {
         let task_channel = unbounded();
         let state_channel = unbounded();
 
-        StateManager::spawn(state_channel.clone_receiver());
+        let state_manager_handle =
+            Some(StateManager::spawn(state_channel.clone_receiver(), None)).into();
         let dispatcher = Dispatcher::new(max_workers, min_workers, task_channel.clone_receiver());
+        let dispatch_handle = Some(dispatcher.spawn(state_channel.clone_sender())).into();
 
         // Hook all panics.
         let panics_clone = Arc::clone(&panics);
@@ -51,14 +56,15 @@ impl WPool {
         }));
 
         Self {
-            dispatch_handle: Some(dispatcher.spawn(state_channel.clone_sender())).into(),
+            dispatch_handle,
+            state_manager_handle,
             max_workers,
             min_workers,
             panics,
             shutdown_lock: unbounded().into(),
             stop_once: Once::new(),
             task_sender: task_channel.clone_sender(),
-            state_manager: state_channel.clone_sender(),
+            state_sender: state_channel.clone_sender(),
         }
     }
 
@@ -169,7 +175,9 @@ impl WPool {
     /// ```
     ///
     pub fn worker_count(&self) -> usize {
-        get_state!(WorkerCount, &self.state_manager)
+        query_state(&self.state_sender, |state| {
+            state.worker_count.load(Ordering::SeqCst)
+        })
     }
 
     /// Enqueues the given function.
@@ -263,12 +271,16 @@ impl WPool {
     where
         F: FnOnce() + Send + 'static,
     {
-        let (tx, rx) = mpsc::sync_channel(0);
+        let chan = bounded(0);
+        let sender = Some(chan.clone_sender());
+        println!("wpool() -> submit_confirm -> ab to submit signal");
         self.submit_signal(Signal::NewTask(
             Task::new(task),
-            Mutex::new(Some(tx)).into(),
+            Arc::new(Mutex::new(sender)),
         ));
-        let _ = rx.recv();
+        println!("wpool() -> submit_confirm -> ab to block waiting for confirm");
+        let _ = chan.recv();
+        println!("wpool() -> confirm_sender -> got confirmation, unblocking");
     }
 
     /// Stops the pool and waits for currently running tasks, as well as any tasks
@@ -481,7 +493,9 @@ impl WPool {
 
     #[allow(dead_code)]
     pub(crate) fn waiting_queue_len(&self) -> usize {
-        get_state!(WaitingQueueLength, &self.state_manager)
+        query_state(&self.state_sender, |state| {
+            state.waiting_queue_length.load(Ordering::SeqCst)
+        })
     }
 
     /************************* Private methods ***************************************/
@@ -495,15 +509,15 @@ impl WPool {
     }
 
     fn status(&self) -> WPoolStatus {
-        WPoolStatus::from_u8(get_state!(PoolStatus, &self.state_manager))
+        query_state(&self.state_sender, |state| {
+            state.pool_status.load(Ordering::SeqCst).as_enum()
+        })
     }
 
     fn set_status(&self, status: WPoolStatus) {
-        set_state!(
-            PoolStatus,
-            Action::Store(status.as_u8()),
-            &self.state_manager
-        );
+        query_state(&self.state_sender, move |state| {
+            state.pool_status.store(status.as_u8(), Ordering::SeqCst);
+        });
     }
 
     fn shutdown(&self, wait: bool) {
@@ -518,6 +532,24 @@ impl WPool {
         });
 
         if let Some(handle) = safe_lock(&self.dispatch_handle).take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for WPool {
+    fn drop(&mut self) {
+        query_state(&self.state_sender, |state| {
+            safe_lock(&state.worker_handles)
+                .iter_mut()
+                .for_each(|(_, handle)| {
+                    if let Some(h) = handle.take() {
+                        let _ = h.join();
+                    }
+                });
+        });
+        self.state_sender.drop();
+        if let Some(handle) = safe_lock(&self.state_manager_handle).take() {
             let _ = handle.join();
         }
     }

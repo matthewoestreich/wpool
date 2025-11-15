@@ -14,6 +14,7 @@ use crate::{
     WaitGroup,
     channel::{bounded, unbounded},
     safe_lock,
+    state::{StateManager, query_state},
     wpool::{WORKER_IDLE_TIMEOUT, WPool},
 };
 
@@ -158,6 +159,21 @@ fn test_basic() {
 }
 
 #[test]
+fn test_state_manager_query() {
+    let chan = crate::channel::unbounded();
+    let handle = StateManager::spawn(chan.clone_receiver(), None);
+
+    let val: usize = query_state(&chan.clone_sender(), |state| {
+        state.worker_count.fetch_add(1, Ordering::SeqCst);
+        state.worker_count.load(Ordering::SeqCst)
+    });
+
+    assert_eq!(val, 1);
+    chan.drop_sender(); // close the sender to exit the manager thread
+    handle.join().unwrap();
+}
+
+#[test]
 fn test_min_workers_basic() {
     let max_workers = 2;
     let min_workers = 1;
@@ -170,6 +186,10 @@ fn test_min_workers_basic() {
     // Make sure max_workers amount of timeout time has passed.
     let sleep_for = ((max_workers + 1) as u32) * WORKER_IDLE_TIMEOUT;
     thread::sleep(sleep_for);
+    println!(
+        "just before assert min_workers={min_workers} wp.worker_count() = {}",
+        wp.worker_count()
+    );
     // Should only have 'min_workers' alive
     assert_eq!(
         min_workers,
@@ -177,7 +197,9 @@ fn test_min_workers_basic() {
         "expected {min_workers} to be alive, got {}",
         wp.worker_count()
     );
+    println!("stop_wait()");
     wp.stop_wait(); // No leaks
+    println!("no_leaks");
 }
 
 #[test]
@@ -215,18 +237,23 @@ fn test_submit_confirm() {
         // Block until our task has been given to a worker or queued (not executed).
         wp.submit_confirm(move || {
             thread::sleep(Duration::from_secs(1));
+            println!("job {i} exiting");
         });
         // Since we waited for our job to be given to a worker or queued,
         // the worker_count should now reflect that.
+        println!("[[test_submit_confirm]] -> in loop ab to call `wp.worker_count()`");
         assert_eq!(wp.worker_count(), i);
+        println!("[[test_submit_confirm]] -> ok : got worker count, on iteration {i}");
     }
 
+    println!("[[test_submit_confirm]] -> out of loop");
     // Should have `max_workers` amount of workers.
     assert_eq!(wp.worker_count(), max_workers);
 
     wp.stop_wait();
     // Should have 0 workers now.
     assert_eq!(wp.worker_count(), 0);
+    println!("[[test_submit_confirm]] -> done")
 }
 
 #[test]
@@ -291,7 +318,8 @@ fn test_capture_example_in_readme() {
 
 #[test]
 fn test_signal_cannot_be_confirmed_more_than_once() {
-    let (sender, _) = mpsc::sync_channel::<()>(1);
+    let chan = bounded(1);
+    let sender = chan.clone_sender();
     let signal = crate::Signal::NewTask(crate::Task::noop(), Mutex::new(Some(sender)).into());
     signal.confirm_submit();
     match &signal {
@@ -659,6 +687,7 @@ fn test_overflow() {
         });
     }
 
+    println!("[[test_overflow]] wg_wait");
     wait_group.wait();
 
     // Start a thread to free the workers.
@@ -667,11 +696,17 @@ fn test_overflow() {
         release_chan.drop_sender();
     });
 
+    println!("[[test_overflow]] p.stop()");
     p.stop();
+    println!(
+        "[[test_overflow]] p.waiting_queue_len(), {}",
+        p.waiting_queue_len()
+    );
 
     // Now that the pool has exited, it is safe to inspect its waiting
     // queue without causing a race.
     let wq_len = p.waiting_queue_len();
+    println!("[[test_overflow]] wait_queue_len = {wq_len}");
     assert_eq!(
         wq_len, expected_len,
         "Expected waiting to queue to have len of '{expected_len}' but got '{wq_len}'"
@@ -850,9 +885,11 @@ fn test_idle_worker() {
         });
     }
 
+    println!("853");
     // Ensure all workers have passed the timeout
     thread::sleep(WORKER_IDLE_TIMEOUT * ((max_workers + 1) as u32));
     p.stop_wait();
+    println!("856");
     assert_eq!(p.worker_count(), 0);
 }
 
@@ -1182,11 +1219,12 @@ fn test_wait_queue_len_race_2() {
 }
 
 #[test]
-#[serial_test::serial]
 fn test_wq_race() {
     run_test_n_times(200, 0, true, waiting_queue_len_race);
 }
 
+#[test]
+#[ignore]
 fn waiting_queue_len_race() {
     let num_threads = 100;
     let num_jobs = 20;
@@ -1235,6 +1273,7 @@ fn waiting_queue_len_race() {
         final_max < num_threads * num_jobs,
         "should not have seen all tasks on waiting queue"
     );
+    wp.stop_wait();
 }
 
 #[test]
@@ -1303,6 +1342,7 @@ fn test_worker_count() {
         assert_eq!(i + 1, count);
     }
     assert_eq!(count, max_workers);
+    wp.stop_wait();
 }
 
 #[test]
@@ -1427,6 +1467,7 @@ fn test_submit_wait_actually_waits() {
         num_regular_jobs + 1,
         "Did not wait for submit_wait job to complete"
     );
+    p.stop_wait();
 }
 
 #[test]
@@ -1507,6 +1548,7 @@ fn test_wait_group_done_before_wait() {
 
 #[test]
 fn test_time() {
+    let start = Instant::now();
     let max_workers = 5;
     let jobs = 50;
     let wp = WPool::new(max_workers);
@@ -1527,6 +1569,7 @@ fn test_time() {
         "expected {jobs} got {}",
         counter.load(Ordering::SeqCst)
     );
+    assert!(start.elapsed() < Duration::from_millis(5300));
 }
 
 #[test]
