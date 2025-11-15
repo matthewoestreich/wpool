@@ -17,6 +17,7 @@ use crate::{
     wpool::{WORKER_IDLE_TIMEOUT, WPool},
 };
 
+/*
 fn detect_leaky_threads<F>(f: F)
 where
     F: FnOnce() + UnwindSafe,
@@ -39,6 +40,7 @@ where
         //std::panic::resume_unwind(err);
     }
 }
+*/
 
 // Runs a test `n_times` in a row.
 // failure_threshold : If this many runs fail this test willl fail. If 'failure_threshold' = 2, if 3 jobs fail, this job fails.
