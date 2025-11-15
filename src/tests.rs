@@ -14,7 +14,7 @@ use crate::{
     WaitGroup,
     channel::{bounded, unbounded},
     safe_lock,
-    state::{StateManager, query_state},
+    state::{StateManager, StateMut},
     wpool::{WORKER_IDLE_TIMEOUT, WPool},
 };
 
@@ -163,7 +163,7 @@ fn test_state_manager_query() {
     let chan = crate::channel::unbounded();
     let handle = StateManager::spawn(chan.clone_receiver(), None);
 
-    let val: usize = query_state(&chan.clone_sender(), |state| {
+    let val: usize = StateMut::query_state(&chan.clone_sender(), |state| {
         state.worker_count += 1;
         state.worker_count
     });
@@ -313,7 +313,6 @@ fn test_capture_example_in_readme() {
     });
 
     wp.stop_wait();
-    thread::sleep(Duration::from_secs(1)); // Idk why this test keeps being marked as leaky.
 }
 
 #[test]
@@ -415,14 +414,14 @@ fn test_thread_guardian_multiple_panics_in_worker() {
 fn test_get_workers_panic_info() {
     let wp = WPool::new(2);
 
-    wp.submit(move || {
+    wp.submit_confirm(move || {
         panic!("one");
     });
 
-    wp.stop_wait();
     let p = wp.get_workers_panic_info();
     println!("{p:?}");
     assert_eq!(p.len(), 1);
+    wp.stop_wait();
 }
 
 #[test]

@@ -8,9 +8,9 @@ use std::{
 };
 
 use crate::{
-    AsWPoolStatus, Signal, Task, ThreadGuardian, WPoolStatus, WaitGroup,
+    Signal, Task, ThreadGuardian, WPoolStatus, WaitGroup,
     channel::{Receiver, Sender, bounded},
-    state::{self, query_state},
+    state::{self, StateMut},
     wpool::WORKER_IDLE_TIMEOUT,
 };
 
@@ -45,7 +45,6 @@ impl Dispatcher {
             let wait_group = WaitGroup::new();
 
             loop {
-                print!(".");
                 // See `process_waiting_queue` comments for more info.
                 if !waiting_queue.is_empty() {
                     if !Self::process_waiting_queue(
@@ -64,12 +63,10 @@ impl Dispatcher {
                     Ok(signal) => signal,
                     Err(RecvTimeoutError::Timeout) => {
                         if is_idle
-                            && query_state(&state_sender, |state| state.worker_count) > min_workers // Keep min workers alive.
+                            && StateMut::get_worker_count(&state_sender) > min_workers // Keep min workers alive.
                             && worker_channel.try_send(Signal::Terminate).is_ok()
                         {
-                            query_state(&state_sender, |state| {
-                                state.worker_count -= 1;
-                            });
+                            StateMut::decrement_worker_count(&state_sender);
                         }
                         is_idle = true;
                         // No signal, just loop.
@@ -78,13 +75,14 @@ impl Dispatcher {
                     Err(_) => break,
                 };
 
+                // Take ownership of confirmation `Sender<()>` from `signal`.
+                // This is for when `pool.submit_confirm(...)` is called.
                 let confirmation = signal.take_confirm();
 
                 // Got a signal. Process it by placing in wait queue or handing to worker.
-                if query_state(&state_sender, |state| state.worker_count) >= max_workers {
+                if StateMut::get_worker_count(&state_sender) >= max_workers {
                     waiting_queue.push_back(signal);
-                    let len = waiting_queue.len();
-                    query_state(&state_sender, move |state| state.waiting_queue_length = len);
+                    StateMut::set_waiting_queue_len(&state_sender, waiting_queue.len());
                 } else {
                     wait_group.add(1);
                     Self::spawn_worker(
@@ -93,22 +91,20 @@ impl Dispatcher {
                         worker_channel.clone_receiver(),
                         state_sender.clone(),
                     );
-                    query_state(&state_sender, |state| {
-                        state.worker_count += 1;
-                    });
+                    StateMut::increment_worker_count(&state_sender);
                 }
 
+                // If we have confirmation, drop it (which IS the confirmation).
+                // [[ IMPORTANT ]] : we only want to send confirmation AFTER we know the worker
+                // count has been updated. This is for when `.submit_confirm(...)` is called.
                 if let Some(confirm) = confirmation {
                     confirm.drop();
                 }
-
                 is_idle = false;
             }
 
             // If `stop_wait()` was called run tasks and waiting queue.
-            if query_state(&state_sender, |state| state.pool_status.as_enum())
-                == WPoolStatus::Stopped(true)
-            {
+            if StateMut::get_pool_status(&state_sender) == WPoolStatus::Stopped(true) {
                 Self::run_queued_tasks(
                     &mut waiting_queue,
                     &state_sender,
@@ -117,9 +113,9 @@ impl Dispatcher {
             }
 
             // Terminate workers as they become available.
-            for _ in 0..query_state(&state_sender, |state| state.worker_count) {
+            for _ in 0..StateMut::get_worker_count(&state_sender) {
                 let _ = worker_channel.send(Signal::Terminate); // Blocking.
-                query_state(&state_sender, |state| state.worker_count -= 1);
+                StateMut::decrement_worker_count(&state_sender);
             }
 
             wait_group.wait();
@@ -133,15 +129,14 @@ impl Dispatcher {
     /// signals directly to available workers.
     fn process_waiting_queue(
         waiting_queue: &mut VecDeque<Signal>,
-        state_manager: &Sender<state::Query>,
+        state_sender: &Sender<state::Query>,
         task_receiver: &Receiver<Signal>,
         worker_sender: &Sender<Signal>,
     ) -> bool {
         match task_receiver.try_recv() {
             Ok(signal) => {
                 waiting_queue.push_back(signal);
-                let len = waiting_queue.len();
-                query_state(state_manager, move |state| state.waiting_queue_length = len);
+                StateMut::set_waiting_queue_len(state_sender, waiting_queue.len());
             }
             Err(TryRecvError::Empty) => {
                 if let Some(signal) = waiting_queue.front()
@@ -150,8 +145,7 @@ impl Dispatcher {
                     // Only pop off (modify) waitiing queue once we know the
                     // signal was successfully passed into the worker channel.
                     waiting_queue.pop_front();
-                    let len = waiting_queue.len();
-                    query_state(state_manager, move |state| state.waiting_queue_length = len);
+                    StateMut::set_waiting_queue_len(state_sender, waiting_queue.len());
                 }
             }
             // Task channel closed.
@@ -163,7 +157,7 @@ impl Dispatcher {
     /// Essentially drains the wait_queue.
     fn run_queued_tasks(
         waiting_queue: &mut VecDeque<Signal>,
-        state_manager: &Sender<state::Query>,
+        state_sender: &Sender<state::Query>,
         worker_sender: &Sender<Signal>,
     ) {
         while !waiting_queue.is_empty() {
@@ -174,8 +168,7 @@ impl Dispatcher {
                 // Only pop off (modify) waitiing queue once we know the
                 // signal was successfully passed into the worker channel.
                 waiting_queue.pop_front();
-                let len = waiting_queue.len();
-                query_state(state_manager, move |state| state.waiting_queue_length = len);
+                StateMut::set_waiting_queue_len(state_sender, waiting_queue.len());
             }
         }
     }
@@ -189,6 +182,7 @@ impl Dispatcher {
         state_sender: Sender<state::Query>,
     ) {
         let state_sender_clone = state_sender.clone();
+
         let handle = thread::spawn(move || {
             let tg = ThreadGuardian::new((
                 Signal::NewTask(Task::noop(), Mutex::new(None).into()),
@@ -196,6 +190,7 @@ impl Dispatcher {
                 worker_receiver.clone(),
                 state_sender_clone,
             ));
+
             tg.on_panic(|(signal, wait_group, worker_receiver, state_sender)| {
                 Self::spawn_worker(signal, wait_group, worker_receiver, state_sender);
             });
@@ -216,10 +211,6 @@ impl Dispatcher {
             wait_group.done();
         });
 
-        query_state(&state_sender, |state| {
-            state
-                .worker_handles
-                .insert(handle.thread().id(), Some(handle));
-        });
+        StateMut::insert_worker_handle(&state_sender, handle.thread().id(), handle);
     }
 }
