@@ -2,7 +2,6 @@ use std::{
     panic::{self},
     sync::{
         Arc, Mutex, Once,
-        atomic::Ordering,
         mpsc::{self},
     },
     thread,
@@ -175,9 +174,7 @@ impl WPool {
     /// ```
     ///
     pub fn worker_count(&self) -> usize {
-        query_state(&self.state_sender, |state| {
-            state.worker_count.load(Ordering::SeqCst)
-        })
+        query_state(&self.state_sender, |state| state.worker_count)
     }
 
     /// Enqueues the given function.
@@ -273,14 +270,11 @@ impl WPool {
     {
         let chan = bounded(0);
         let sender = Some(chan.clone_sender());
-        println!("wpool() -> submit_confirm -> ab to submit signal");
         self.submit_signal(Signal::NewTask(
             Task::new(task),
             Arc::new(Mutex::new(sender)),
         ));
-        println!("wpool() -> submit_confirm -> ab to block waiting for confirm");
         let _ = chan.recv();
-        println!("wpool() -> confirm_sender -> got confirmation, unblocking");
     }
 
     /// Stops the pool and waits for currently running tasks, as well as any tasks
@@ -493,9 +487,7 @@ impl WPool {
 
     #[allow(dead_code)]
     pub(crate) fn waiting_queue_len(&self) -> usize {
-        query_state(&self.state_sender, |state| {
-            state.waiting_queue_length.load(Ordering::SeqCst)
-        })
+        query_state(&self.state_sender, |state| state.waiting_queue_length)
     }
 
     /************************* Private methods ***************************************/
@@ -509,14 +501,12 @@ impl WPool {
     }
 
     fn status(&self) -> WPoolStatus {
-        query_state(&self.state_sender, |state| {
-            state.pool_status.load(Ordering::SeqCst).as_enum()
-        })
+        query_state(&self.state_sender, |state| state.pool_status.as_enum())
     }
 
     fn set_status(&self, status: WPoolStatus) {
         query_state(&self.state_sender, move |state| {
-            state.pool_status.store(status.as_u8(), Ordering::SeqCst);
+            state.pool_status = status.as_u8()
         });
     }
 
@@ -540,13 +530,11 @@ impl WPool {
 impl Drop for WPool {
     fn drop(&mut self) {
         query_state(&self.state_sender, |state| {
-            safe_lock(&state.worker_handles)
-                .iter_mut()
-                .for_each(|(_, handle)| {
-                    if let Some(h) = handle.take() {
-                        let _ = h.join();
-                    }
-                });
+            for (_, h_opt) in state.worker_handles.iter_mut() {
+                if let Some(h) = h_opt.take() {
+                    let _ = h.join();
+                }
+            }
         });
         self.state_sender.drop();
         if let Some(handle) = safe_lock(&self.state_manager_handle).take() {

@@ -1,9 +1,5 @@
 use std::{
     collections::HashMap,
-    sync::{
-        Mutex,
-        atomic::{AtomicU8, AtomicUsize},
-    },
     thread::{self, JoinHandle, ThreadId},
 };
 
@@ -13,21 +9,21 @@ use crate::{
 };
 
 pub(crate) struct StateData {
-    pub(crate) worker_count: AtomicUsize,
+    pub(crate) worker_count: usize,
     #[allow(dead_code)]
-    pub(crate) worker_handles: Mutex<HashMap<ThreadId, Option<JoinHandle<()>>>>,
-    pub(crate) pool_status: AtomicU8,
-    pub(crate) waiting_queue_length: AtomicUsize,
+    pub(crate) worker_handles: HashMap<ThreadId, Option<JoinHandle<()>>>,
+    pub(crate) pool_status: u8,
+    pub(crate) waiting_queue_length: usize,
 }
 
 #[allow(clippy::derivable_impls)]
 impl Default for StateData {
     fn default() -> Self {
         Self {
-            worker_count: AtomicUsize::new(0),
-            worker_handles: Mutex::new(HashMap::new()),
-            pool_status: AtomicU8::new(WPoolStatus::Running.as_u8()),
-            waiting_queue_length: AtomicUsize::new(0),
+            worker_count: 0,
+            worker_handles: HashMap::new(),
+            pool_status: WPoolStatus::Running.as_u8(),
+            waiting_queue_length: 0,
         }
     }
 }
@@ -57,25 +53,17 @@ impl StateManager {
     }
 }
 
-pub fn query_state<R, F>(sender: &Sender<Query>, f: F) -> R
+pub(crate) fn query_state<R, F>(sender: &Sender<Query>, f: F) -> R
 where
     R: Send + std::fmt::Debug + 'static,
     F: FnOnce(&mut StateData) -> R + Send + 'static,
 {
-    println!("  query_state -> start");
     let chan = bounded(0);
     let reply = chan.clone_sender();
     let closure = move |state: &mut StateData| {
         let res = f(state);
-        match reply.send(res) {
-            Ok(_) => println!(">> query_state -> from closure, sent success"),
-            Err(e) => println!(">> query_state -> from closure, error sending : {e:?}"),
-        }
+        let _ = reply.send(res);
     };
-    println!("    query_state -> sending query to manager");
     sender.send(Query::Closure(Box::new(closure))).unwrap();
-    println!("    query_state -> DONE sending query to manager");
-    let got = chan.recv().expect("state to exist");
-    println!("    query_state -> end -> returning {got:?}");
-    got
+    chan.recv().expect("state to exist")
 }

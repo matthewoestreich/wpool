@@ -295,6 +295,8 @@ mod tests {
             elapsed < expected_minimum_elapsed,
             "Did not pace tasks correctly, finished too soon! Expected elapsed = {expected_minimum_elapsed:?} | actual elapsed = {elapsed:?}"
         );
+
+        wp.stop_wait();
     }
 
     #[test]
@@ -433,6 +435,7 @@ mod tests {
         let handle = thread::spawn(move || thread_paced_fn());
         let _ = handle.join();
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+        pacer.stop();
     }
 
     #[test]

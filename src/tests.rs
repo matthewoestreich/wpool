@@ -164,8 +164,8 @@ fn test_state_manager_query() {
     let handle = StateManager::spawn(chan.clone_receiver(), None);
 
     let val: usize = query_state(&chan.clone_sender(), |state| {
-        state.worker_count.fetch_add(1, Ordering::SeqCst);
-        state.worker_count.load(Ordering::SeqCst)
+        state.worker_count += 1;
+        state.worker_count
     });
 
     assert_eq!(val, 1);
@@ -321,7 +321,7 @@ fn test_signal_cannot_be_confirmed_more_than_once() {
     let chan = bounded(1);
     let sender = chan.clone_sender();
     let signal = crate::Signal::NewTask(crate::Task::noop(), Mutex::new(Some(sender)).into());
-    signal.confirm_submit();
+    drop(signal.take_confirm());
     match &signal {
         crate::Signal::NewTask(_, c) => {
             assert!(
@@ -331,7 +331,7 @@ fn test_signal_cannot_be_confirmed_more_than_once() {
         }
         _ => panic!("expected a Signal::NewTask"),
     };
-    signal.confirm_submit();
+    drop(signal.take_confirm());
     match &signal {
         crate::Signal::NewTask(_, c) => {
             assert!(
@@ -521,8 +521,16 @@ fn test_stop_wait_basic() {
             counter_clone.fetch_add(1, Ordering::SeqCst);
         });
     }
+    println!("panic= {:?}", p.get_workers_panic_info());
     p.stop_wait();
-    assert_eq!(counter.load(Ordering::SeqCst), num_jobs);
+    println!("panic= {:?}", p.get_workers_panic_info());
+    let curr_count = counter.load(Ordering::SeqCst);
+    println!("expected {curr_count} to equal {num_jobs}");
+    assert_eq!(
+        curr_count, num_jobs,
+        "expected {curr_count} to equal {num_jobs}"
+    );
+    println!("panic= {:?}", p.get_workers_panic_info());
 }
 
 #[test]
@@ -770,6 +778,7 @@ fn test_pause_resume_resets_resume_channel() {
         );
         wp.resume();
     }
+    wp.stop_wait();
 }
 
 #[test]
@@ -824,6 +833,7 @@ fn test_multiple_pause_resume_resets_resume_channel() {
     }
 
     assert_eq!(counter.load(Ordering::SeqCst), num_jobs);
+    wp.stop_wait();
 }
 
 #[test]
@@ -1374,6 +1384,10 @@ fn test_long_running_job_continues_after_stop_wait() {
     }
 
     p.stop_wait();
+    println!(
+        "\n\n\n\ncount={} | max_workers={max_workers}",
+        counter.load(Ordering::SeqCst)
+    );
     assert_eq!(counter.load(Ordering::SeqCst), max_workers);
 }
 

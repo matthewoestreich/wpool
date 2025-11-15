@@ -2,7 +2,6 @@ use std::{
     collections::VecDeque,
     sync::{
         Mutex,
-        atomic::Ordering,
         mpsc::{RecvTimeoutError, TryRecvError},
     },
     thread::{self},
@@ -11,7 +10,6 @@ use std::{
 use crate::{
     AsWPoolStatus, Signal, Task, ThreadGuardian, WPoolStatus, WaitGroup,
     channel::{Receiver, Sender, bounded},
-    safe_lock,
     state::{self, query_state},
     wpool::WORKER_IDLE_TIMEOUT,
 };
@@ -47,6 +45,7 @@ impl Dispatcher {
             let wait_group = WaitGroup::new();
 
             loop {
+                print!(".");
                 // See `process_waiting_queue` comments for more info.
                 if !waiting_queue.is_empty() {
                     if !Self::process_waiting_queue(
@@ -65,11 +64,11 @@ impl Dispatcher {
                     Ok(signal) => signal,
                     Err(RecvTimeoutError::Timeout) => {
                         if is_idle
-                            && query_state(&state_sender, |state| state.worker_count.load(Ordering::SeqCst)) > min_workers // Keep min workers alive.
+                            && query_state(&state_sender, |state| state.worker_count) > min_workers // Keep min workers alive.
                             && worker_channel.try_send(Signal::Terminate).is_ok()
                         {
                             query_state(&state_sender, |state| {
-                                state.worker_count.fetch_sub(1, Ordering::SeqCst)
+                                state.worker_count -= 1;
                             });
                         }
                         is_idle = true;
@@ -82,15 +81,10 @@ impl Dispatcher {
                 let confirmation = signal.take_confirm();
 
                 // Got a signal. Process it by placing in wait queue or handing to worker.
-                if query_state(&state_sender, |state| {
-                    state.worker_count.load(Ordering::SeqCst)
-                }) >= max_workers
-                {
+                if query_state(&state_sender, |state| state.worker_count) >= max_workers {
                     waiting_queue.push_back(signal);
                     let len = waiting_queue.len();
-                    query_state(&state_sender, move |state| {
-                        state.waiting_queue_length.store(len, Ordering::SeqCst);
-                    });
+                    query_state(&state_sender, move |state| state.waiting_queue_length = len);
                 } else {
                     wait_group.add(1);
                     Self::spawn_worker(
@@ -100,18 +94,20 @@ impl Dispatcher {
                         state_sender.clone(),
                     );
                     query_state(&state_sender, |state| {
-                        state.worker_count.fetch_add(1, Ordering::SeqCst);
+                        state.worker_count += 1;
                     });
                 }
 
-                confirmation.unwrap().drop();
+                if let Some(confirm) = confirmation {
+                    confirm.drop();
+                }
+
                 is_idle = false;
             }
 
             // If `stop_wait()` was called run tasks and waiting queue.
-            if query_state(&state_sender, |state| {
-                state.pool_status.load(Ordering::SeqCst).as_enum()
-            }) == WPoolStatus::Stopped(true)
+            if query_state(&state_sender, |state| state.pool_status.as_enum())
+                == WPoolStatus::Stopped(true)
             {
                 Self::run_queued_tasks(
                     &mut waiting_queue,
@@ -121,17 +117,12 @@ impl Dispatcher {
             }
 
             // Terminate workers as they become available.
-            for _ in 0..query_state(&state_sender, |state| {
-                state.worker_count.load(Ordering::SeqCst)
-            }) {
+            for _ in 0..query_state(&state_sender, |state| state.worker_count) {
                 let _ = worker_channel.send(Signal::Terminate); // Blocking.
-                query_state(&state_sender, |state| {
-                    state.worker_count.fetch_sub(1, Ordering::SeqCst);
-                });
+                query_state(&state_sender, |state| state.worker_count -= 1);
             }
 
             wait_group.wait();
-            println!("dispatcher() -> exiting thread");
         })
     }
 
@@ -150,9 +141,7 @@ impl Dispatcher {
             Ok(signal) => {
                 waiting_queue.push_back(signal);
                 let len = waiting_queue.len();
-                query_state(state_manager, move |state| {
-                    state.waiting_queue_length.store(len, Ordering::SeqCst)
-                });
+                query_state(state_manager, move |state| state.waiting_queue_length = len);
             }
             Err(TryRecvError::Empty) => {
                 if let Some(signal) = waiting_queue.front()
@@ -162,9 +151,7 @@ impl Dispatcher {
                     // signal was successfully passed into the worker channel.
                     waiting_queue.pop_front();
                     let len = waiting_queue.len();
-                    query_state(state_manager, move |state| {
-                        state.waiting_queue_length.store(len, Ordering::SeqCst)
-                    });
+                    query_state(state_manager, move |state| state.waiting_queue_length = len);
                 }
             }
             // Task channel closed.
@@ -188,9 +175,7 @@ impl Dispatcher {
                 // signal was successfully passed into the worker channel.
                 waiting_queue.pop_front();
                 let len = waiting_queue.len();
-                query_state(state_manager, move |state| {
-                    state.waiting_queue_length.store(len, Ordering::SeqCst)
-                });
+                query_state(state_manager, move |state| state.waiting_queue_length = len);
             }
         }
     }
@@ -232,7 +217,9 @@ impl Dispatcher {
         });
 
         query_state(&state_sender, |state| {
-            safe_lock(&state.worker_handles).insert(handle.thread().id(), Some(handle));
+            state
+                .worker_handles
+                .insert(handle.thread().id(), Some(handle));
         });
     }
 }

@@ -362,23 +362,6 @@ pub(crate) enum Signal {
 }
 
 impl Signal {
-    /// If the Signal is `Signal::NewTask(Task, Some(confirm));` then we take `Some(confirm)`
-    /// and drop it. Effectively sending "confirmation" to the receiving end.
-    /// ## This is the function body of `confirm_submit`
-    /// ```rust,ignore
-    /// if let Signal::NewTask(_, confirm) = self {
-    ///     drop(safe_lock(confirm).take());
-    /// }
-    /// ```
-    pub(crate) fn confirm_submit(&self) {
-        if let Signal::NewTask(_, confirm) = self
-            && let Some(confirmation) = safe_lock(confirm).take()
-        {
-            println!("Signal -> confirm_submit -> dropping sender");
-            confirmation.drop();
-        }
-    }
-
     pub(crate) fn take_confirm(&self) -> Option<Sender<()>> {
         println!("Signal -> take_confirm -> start");
         if let Signal::NewTask(_, confirm) = self {
