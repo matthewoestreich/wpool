@@ -365,7 +365,6 @@ pub(crate) enum Signal {
 
 impl Signal {
     pub(crate) fn take_confirm(&self) -> Option<Sender<()>> {
-        println!("Signal -> take_confirm -> start");
         if let Signal::NewTask(_, confirm) = self {
             return safe_lock(confirm).take();
         }

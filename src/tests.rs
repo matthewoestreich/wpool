@@ -585,10 +585,10 @@ fn test_stop_abandoned_waiting_queue() {
         let mut i = 0;
         while wq_len != num_jobs - max_workers && i < max_iters {
             wq_len = wp.waiting_queue_len();
-            println!(
-                "wq_len={wq_len} | num_jobs - max_workers={}",
-                num_jobs - max_workers
-            );
+            //println!(
+            //    "wq_len={wq_len} | num_jobs - max_workers={}",
+            //    num_jobs - max_workers
+            //);
             i += 1;
         }
 
