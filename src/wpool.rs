@@ -39,11 +39,10 @@ impl WPool {
 
         let panics = Mutex::new(Vec::new()).into();
         let task_channel = unbounded();
-
         let state_channel = unbounded();
+
         StateManager::spawn(state_channel.clone_receiver());
         let dispatcher = Dispatcher::new(max_workers, min_workers, task_channel.clone_receiver());
-        let dispatcher_handle = dispatcher.spawn(state_channel.clone_sender());
 
         // Hook all panics.
         let panics_clone = Arc::clone(&panics);
@@ -52,7 +51,7 @@ impl WPool {
         }));
 
         Self {
-            dispatch_handle: Some(dispatcher_handle).into(),
+            dispatch_handle: Some(dispatcher.spawn(state_channel.clone_sender())).into(),
             max_workers,
             min_workers,
             panics,
