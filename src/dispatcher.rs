@@ -140,7 +140,7 @@ impl Dispatcher {
             }
             Err(TryRecvError::Empty) => {
                 if let Some(signal) = waiting_queue.front()
-                    && let Ok(_) = worker_sender.try_send(signal.clone())
+                    && worker_sender.try_send(signal.clone()).is_ok()
                 {
                     // Only pop off (modify) waitiing queue once we know the
                     // signal was successfully passed into the worker channel.
