@@ -13,8 +13,7 @@ use std::{
 use crate::{
     WaitGroup,
     channel::{bounded, unbounded},
-    safe_lock,
-    state::{StateManager, StateMut},
+    safe_lock, state,
     wpool::{WORKER_IDLE_TIMEOUT, WPool},
 };
 
@@ -161,9 +160,9 @@ fn test_basic() {
 #[test]
 fn test_state_manager_query() {
     let chan = crate::channel::unbounded();
-    let handle = StateManager::spawn(chan.clone_receiver(), None);
+    let handle = state::Manager::spawn(chan.clone_receiver(), None);
 
-    let val: usize = StateMut::query_state(&chan.clone_sender(), |state| {
+    let val: usize = state::query(&chan.clone_sender(), |state| {
         state.worker_count += 1;
         state.worker_count
     });

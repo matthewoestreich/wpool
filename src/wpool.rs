@@ -12,8 +12,7 @@ use crate::{
     PanicInfo, Signal, Task, WPoolStatus, WaitGroup,
     channel::{Channel, Sender, bounded, unbounded},
     dispatcher::Dispatcher,
-    safe_lock,
-    state::{self, StateManager, StateMut},
+    safe_lock, state,
 };
 
 pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -30,7 +29,7 @@ pub struct WPool {
     stop_once: Once,
     task_sender: Sender<Signal>,
     state_manager_handle: Mutex<Option<thread::JoinHandle<()>>>,
-    state_sender: Sender<state::Query>,
+    state_sender: Sender<state::QueryFn>,
 }
 
 impl WPool {
@@ -44,7 +43,7 @@ impl WPool {
         let state_channel = unbounded();
 
         let state_manager_handle =
-            Some(StateManager::spawn(state_channel.clone_receiver(), None)).into();
+            Some(state::Manager::spawn(state_channel.clone_receiver(), None)).into();
         let dispatcher = Dispatcher::new(max_workers, min_workers, task_channel.clone_receiver());
         let dispatch_handle = Some(dispatcher.spawn(state_channel.clone_sender())).into();
 
@@ -174,7 +173,7 @@ impl WPool {
     /// ```
     ///
     pub fn worker_count(&self) -> usize {
-        StateMut::get_worker_count(&self.state_sender)
+        state::get_worker_count(&self.state_sender)
     }
 
     /// Enqueues the given function.
@@ -485,7 +484,7 @@ impl WPool {
 
     #[allow(dead_code)]
     pub(crate) fn waiting_queue_len(&self) -> usize {
-        StateMut::get_waiting_queue_len(&self.state_sender)
+        state::get_waiting_queue_len(&self.state_sender)
     }
 
     /************************* Private methods ***************************************/
@@ -499,11 +498,11 @@ impl WPool {
     }
 
     fn status(&self) -> WPoolStatus {
-        StateMut::get_pool_status(&self.state_sender)
+        state::get_pool_status(&self.state_sender)
     }
 
     fn set_status(&self, status: WPoolStatus) {
-        StateMut::set_pool_status(&self.state_sender, status);
+        state::set_pool_status(&self.state_sender, status);
     }
 
     fn shutdown(&self, wait: bool) {
@@ -525,8 +524,10 @@ impl WPool {
 
 impl Drop for WPool {
     fn drop(&mut self) {
-        StateMut::join_all_worker_handles(&self.state_sender);
+        state::join_all_worker_handles(&self.state_sender);
+
         self.state_sender.drop();
+
         if let Some(handle) = safe_lock(&self.state_manager_handle).take() {
             let _ = handle.join();
         }
