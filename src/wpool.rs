@@ -40,7 +40,7 @@ impl WPool {
         let task_channel = unbounded();
         let state_channel = unbounded();
 
-        let state_manager_handle = state::Manager::spawn(state_channel.clone_receiver(), None);
+        let state_manager_handle = state::spawn_manager(state_channel.clone_receiver(), None);
         let dispatcher_handle = dispatcher::spawn(
             min_workers,
             max_workers,

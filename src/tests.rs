@@ -160,7 +160,7 @@ fn test_basic() {
 #[test]
 fn test_state_manager_query() {
     let chan = crate::channel::unbounded();
-    let handle = state::Manager::spawn(chan.clone_receiver(), None);
+    let handle = state::spawn_manager(chan.clone_receiver(), None);
 
     let val: usize = state::query(&chan.clone_sender(), |state| {
         state.worker_count += 1;
@@ -573,7 +573,7 @@ fn test_stop_abandoned_waiting_queue() {
             wp.submit(move || {
                 ready.done();
                 let _ = receiver.recv();
-                thread::sleep(Duration::from_millis(5));
+                thread::sleep(Duration::from_millis(7));
             });
         }
 

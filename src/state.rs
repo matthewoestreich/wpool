@@ -47,25 +47,21 @@ impl Default for SharedData {
 
 pub(crate) type QueryFn = Box<dyn FnOnce(&mut SharedData) + Send>;
 
-pub(crate) struct Manager {
-    #[allow(dead_code)]
-    state: SharedData,
+/// Spawn a state manager thread. The state manager is the source of truth for all shared state.
+/// It listens for state mutation requests and state retreival requests.
+pub(crate) fn spawn_manager(
+    receiver: Receiver<QueryFn>,
+    initial_state: Option<SharedData>,
+) -> JoinHandle<()> {
+    let mut state = initial_state.unwrap_or_default();
+    thread::spawn(move || {
+        while let Ok(query_fn) = receiver.recv() {
+            query_fn(&mut state)
+        }
+    })
 }
 
-impl Manager {
-    pub(crate) fn spawn(
-        receiver: Receiver<QueryFn>,
-        initial_state: Option<SharedData>,
-    ) -> JoinHandle<()> {
-        let mut state = initial_state.unwrap_or_default();
-        thread::spawn(move || {
-            while let Ok(query_fn) = receiver.recv() {
-                query_fn(&mut state)
-            }
-        })
-    }
-}
-
+/// Provide a query function (callback function) that is passed a mutable refernce to current state.
 pub(crate) fn query<R, F>(sender: &Sender<QueryFn>, query_fn: F) -> R
 where
     R: Send + std::fmt::Debug + 'static,
@@ -79,6 +75,8 @@ where
     sender.send(Box::new(closure)).unwrap();
     chan.recv().expect("state to exist")
 }
+
+/********************** State Helper Fns ****************************/
 
 pub(crate) fn get_worker_count(state_sender: &Sender<QueryFn>) -> usize {
     query(state_sender, |state| state.worker_count)
@@ -122,9 +120,9 @@ pub(crate) fn insert_worker_handle(
 
 pub(crate) fn join_all_worker_handles(state_sender: &Sender<QueryFn>) {
     query(state_sender, |state| {
-        for (_, h_opt) in state.worker_handles.iter_mut() {
-            if let Some(h) = h_opt.take() {
-                let _ = h.join();
+        for (_, handle_opt) in state.worker_handles.iter_mut() {
+            if let Some(handle) = handle_opt.take() {
+                let _ = handle.join();
             }
         }
     })
