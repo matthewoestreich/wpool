@@ -80,36 +80,44 @@ where
     chan.recv().expect("state to exist")
 }
 
+#[inline]
 pub(crate) fn get_worker_count(state_sender: &Sender<QueryFn>) -> usize {
     query(state_sender, |state| state.worker_count)
 }
 
+#[inline]
 pub(crate) fn increment_worker_count(state_sender: &Sender<QueryFn>) {
     query(state_sender, |state| state.worker_count += 1);
 }
 
+#[inline]
 pub(crate) fn decrement_worker_count(state_sender: &Sender<QueryFn>) {
     query(state_sender, |state| state.worker_count -= 1);
 }
 
+#[inline]
 pub(crate) fn get_pool_status(state_sender: &Sender<QueryFn>) -> WPoolStatus {
     query(state_sender, |state| state.pool_status.as_enum())
 }
 
+#[inline]
 pub(crate) fn set_pool_status(state_sender: &Sender<QueryFn>, status: WPoolStatus) {
     query(state_sender, move |state| {
         state.pool_status = status.as_u8()
     });
 }
 
+#[inline]
 pub(crate) fn get_waiting_queue_len(state_sender: &Sender<QueryFn>) -> usize {
     query(state_sender, |state| state.waiting_queue_length)
 }
 
+#[inline]
 pub(crate) fn set_waiting_queue_len(state_sender: &Sender<QueryFn>, len: usize) {
     query(state_sender, move |state| state.waiting_queue_length = len);
 }
 
+#[inline]
 pub(crate) fn insert_worker_handle(
     state_sender: &Sender<QueryFn>,
     key: ThreadId,
@@ -120,6 +128,7 @@ pub(crate) fn insert_worker_handle(
     });
 }
 
+#[inline]
 pub(crate) fn join_all_worker_handles(state_sender: &Sender<QueryFn>) {
     query(state_sender, |state| {
         for (_, h_opt) in state.worker_handles.iter_mut() {
