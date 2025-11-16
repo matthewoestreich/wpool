@@ -11,8 +11,7 @@ use std::{
 use crate::{
     PanicInfo, Signal, Task, WPoolStatus, WaitGroup,
     channel::{Channel, Sender, bounded, unbounded},
-    dispatcher::Dispatcher,
-    safe_lock, state,
+    dispatcher, safe_lock, state,
 };
 
 pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -21,15 +20,15 @@ pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 /// without restricting how many tasks can be queued. Submitting tasks is non-blocking,
 /// so you can enqueue any number of tasks without waiting.
 pub struct WPool {
-    dispatch_handle: Mutex<Option<thread::JoinHandle<()>>>,
+    dispatcher_handle: Mutex<Option<thread::JoinHandle<()>>>,
     max_workers: usize,
     min_workers: usize,
     panics: Arc<Mutex<Vec<PanicInfo>>>,
     shutdown_lock: Mutex<Channel<()>>,
     stop_once: Once,
-    task_sender: Sender<Signal>,
     state_manager_handle: Mutex<Option<thread::JoinHandle<()>>>,
     state_sender: Sender<state::QueryFn>,
+    task_sender: Sender<Signal>,
 }
 
 impl WPool {
@@ -38,31 +37,34 @@ impl WPool {
         assert!(max_workers > 0, "max_workers == 0");
         assert!(max_workers >= min_workers, "min_workers > max_workers");
 
-        let panics = Mutex::new(Vec::new()).into();
         let task_channel = unbounded();
         let state_channel = unbounded();
 
-        let state_manager_handle =
-            Some(state::Manager::spawn(state_channel.clone_receiver(), None)).into();
-        let dispatcher = Dispatcher::new(max_workers, min_workers, task_channel.clone_receiver());
-        let dispatch_handle = Some(dispatcher.spawn(state_channel.clone_sender())).into();
+        let state_manager_handle = state::Manager::spawn(state_channel.clone_receiver(), None);
+        let dispatcher_handle = dispatcher::spawn(
+            min_workers,
+            max_workers,
+            task_channel.clone_receiver(),
+            state_channel.clone_sender(),
+        );
 
-        // Hook all panics.
+        let panics = Mutex::new(Vec::new()).into();
         let panics_clone = Arc::clone(&panics);
+
         panic::set_hook(Box::new(move |info| {
             safe_lock(&panics_clone).push(PanicInfo::from(info));
         }));
 
         Self {
-            dispatch_handle,
-            state_manager_handle,
+            dispatcher_handle: Some(dispatcher_handle).into(),
             max_workers,
             min_workers,
             panics,
             shutdown_lock: unbounded().into(),
             stop_once: Once::new(),
-            task_sender: task_channel.clone_sender(),
+            state_manager_handle: Some(state_manager_handle).into(),
             state_sender: state_channel.clone_sender(),
+            task_sender: task_channel.clone_sender(),
         }
     }
 
@@ -516,7 +518,7 @@ impl WPool {
             self.task_sender.drop();
         });
 
-        if let Some(handle) = safe_lock(&self.dispatch_handle).take() {
+        if let Some(handle) = safe_lock(&self.dispatcher_handle).take() {
             let _ = handle.join();
         }
     }
@@ -524,10 +526,7 @@ impl WPool {
 
 impl Drop for WPool {
     fn drop(&mut self) {
-        state::join_all_worker_handles(&self.state_sender);
-
         self.state_sender.drop();
-
         if let Some(handle) = safe_lock(&self.state_manager_handle).take() {
             let _ = handle.join();
         }

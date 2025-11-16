@@ -448,6 +448,7 @@ struct WaitGroupInner {
     lock: Mutex<()>,
 }
 
+#[allow(dead_code)]
 impl WaitGroup {
     pub(crate) fn new() -> Self {
         Self {
