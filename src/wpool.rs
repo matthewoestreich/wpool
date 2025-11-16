@@ -26,9 +26,18 @@ pub struct WPool {
     panics: Arc<Mutex<Vec<PanicInfo>>>,
     shutdown_lock: Mutex<Channel<()>>,
     stop_once: Once,
-    state_manager_handle: Mutex<Option<thread::JoinHandle<()>>>,
+    state_manager_handle: Option<thread::JoinHandle<()>>,
     state_sender: Sender<state::QueryFn>,
     task_sender: Sender<Signal>,
+}
+
+impl Drop for WPool {
+    fn drop(&mut self) {
+        self.state_sender.drop();
+        if let Some(handle) = self.state_manager_handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 impl WPool {
@@ -62,7 +71,7 @@ impl WPool {
             panics,
             shutdown_lock: unbounded().into(),
             stop_once: Once::new(),
-            state_manager_handle: Some(state_manager_handle).into(),
+            state_manager_handle: Some(state_manager_handle),
             state_sender: state_channel.clone_sender(),
             task_sender: task_channel.clone_sender(),
         }
@@ -519,15 +528,6 @@ impl WPool {
         });
 
         if let Some(handle) = safe_lock(&self.dispatcher_handle).take() {
-            let _ = handle.join();
-        }
-    }
-}
-
-impl Drop for WPool {
-    fn drop(&mut self) {
-        self.state_sender.drop();
-        if let Some(handle) = safe_lock(&self.state_manager_handle).take() {
             let _ = handle.join();
         }
     }
