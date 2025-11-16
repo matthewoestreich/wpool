@@ -163,7 +163,7 @@ impl Dispatcher {
         while !waiting_queue.is_empty() {
             // Get a **reference** to the element at the front of waiting queue, if exists.
             if let Some(signal) = waiting_queue.front()
-                && let Ok(_) = worker_sender.try_send(signal.clone())
+                && worker_sender.try_send(signal.clone()).is_ok()
             {
                 // Only pop off (modify) waitiing queue once we know the
                 // signal was successfully passed into the worker channel.
