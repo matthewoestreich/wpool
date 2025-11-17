@@ -11,7 +11,7 @@ use crate::{
 };
 
 pub(crate) trait DispatchStrategy {
-    fn task_receiver(&self) -> Receiver<Signal>;
+    fn task_receiver(&self) -> &Receiver<Signal>;
     fn is_waiting_queue_empty(&self) -> bool;
     fn process_waiting_queue(&mut self) -> bool;
     fn on_signal(&mut self, signal: Signal);
@@ -98,8 +98,8 @@ impl DispatchStrategy for Dispatcher {
         self.waiting_queue.is_empty()
     }
 
-    fn task_receiver(&self) -> Receiver<Signal> {
-        self.task_receiver.clone()
+    fn task_receiver(&self) -> &Receiver<Signal> {
+        &self.task_receiver
     }
 
     fn process_waiting_queue(&mut self) -> bool {
