@@ -76,54 +76,68 @@ where
     chan.recv().expect("state to exist")
 }
 
-/********************** State Helper Fns ****************************/
-
-pub(crate) fn get_worker_count(state_sender: &Sender<QueryFn>) -> usize {
-    query(state_sender, |state| state.worker_count)
+#[derive(Clone)]
+pub(crate) struct StateOps {
+    sender: Sender<QueryFn>,
 }
 
-pub(crate) fn increment_worker_count(state_sender: &Sender<QueryFn>) {
-    query(state_sender, |state| state.worker_count += 1);
-}
+impl StateOps {
+    pub(crate) fn new(sender: Sender<QueryFn>) -> Self {
+        Self { sender }
+    }
 
-pub(crate) fn decrement_worker_count(state_sender: &Sender<QueryFn>) {
-    query(state_sender, |state| state.worker_count -= 1);
-}
+    pub(crate) fn drop_sender(&self) {
+        self.sender.drop();
+    }
 
-pub(crate) fn get_pool_status(state_sender: &Sender<QueryFn>) -> WPoolStatus {
-    query(state_sender, |state| state.pool_status.as_enum())
-}
+    pub(crate) fn clone_sender(&self) -> Sender<QueryFn> {
+        self.sender.clone()
+    }
 
-pub(crate) fn set_pool_status(state_sender: &Sender<QueryFn>, status: WPoolStatus) {
-    query(state_sender, move |state| {
-        state.pool_status = status.as_u8()
-    });
-}
+    pub(crate) fn worker_count(&self) -> usize {
+        query(&self.sender, |state| state.worker_count)
+    }
 
-pub(crate) fn get_waiting_queue_len(state_sender: &Sender<QueryFn>) -> usize {
-    query(state_sender, |state| state.waiting_queue_length)
-}
+    pub(crate) fn inc_worker_count(&self) {
+        query(&self.sender, |state| state.worker_count += 1);
+    }
 
-pub(crate) fn set_waiting_queue_len(state_sender: &Sender<QueryFn>, len: usize) {
-    query(state_sender, move |state| state.waiting_queue_length = len);
-}
+    pub(crate) fn dec_worker_count(&self) {
+        query(&self.sender, |state| state.worker_count -= 1);
+    }
 
-pub(crate) fn insert_worker_handle(
-    state_sender: &Sender<QueryFn>,
-    key: ThreadId,
-    value: JoinHandle<()>,
-) {
-    query(state_sender, move |state| {
-        state.worker_handles.insert(key, Some(value))
-    });
-}
+    pub(crate) fn pool_status(&self) -> WPoolStatus {
+        query(&self.sender, |state| state.pool_status.as_enum())
+    }
 
-pub(crate) fn join_all_worker_handles(state_sender: &Sender<QueryFn>) {
-    query(state_sender, |state| {
-        for (_, handle_opt) in state.worker_handles.iter_mut() {
-            if let Some(handle) = handle_opt.take() {
-                let _ = handle.join();
+    pub(crate) fn set_pool_status(&self, status: WPoolStatus) {
+        query(&self.sender, move |state| {
+            state.pool_status = status.as_u8()
+        });
+    }
+
+    pub(crate) fn waiting_queue_len(&self) -> usize {
+        query(&self.sender, |state| state.waiting_queue_length)
+    }
+
+    pub(crate) fn set_waiting_queue_len(&self, len: usize) {
+        query(&self.sender, move |state| state.waiting_queue_length = len);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn insert_worker_handle(&self, key: ThreadId, value: JoinHandle<()>) {
+        query(&self.sender, move |state| {
+            state.worker_handles.insert(key, Some(value))
+        });
+    }
+
+    pub(crate) fn join_worker_handles(&self) {
+        query(&self.sender, |state| {
+            for (_, handle_opt) in state.worker_handles.iter_mut() {
+                if let Some(handle) = handle_opt.take() {
+                    let _ = handle.join();
+                }
             }
-        }
-    })
+        })
+    }
 }

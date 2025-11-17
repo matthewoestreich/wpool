@@ -2,7 +2,7 @@ use std::{
     panic::{self},
     sync::{
         Arc, Mutex, Once,
-        mpsc::{self},
+        mpsc::{self, RecvTimeoutError},
     },
     thread,
     time::Duration,
@@ -11,7 +11,9 @@ use std::{
 use crate::{
     PanicInfo, Signal, Task, WPoolStatus, WaitGroup,
     channel::{Channel, Sender, bounded, unbounded},
-    dispatcher, safe_lock, state,
+    dispatcher::{DispatchStrategy, Dispatcher},
+    safe_lock,
+    state::{self, StateOps},
 };
 
 pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -27,13 +29,13 @@ pub struct WPool {
     shutdown_lock: Mutex<Channel<()>>,
     stop_once: Once,
     state_manager_handle: Option<thread::JoinHandle<()>>,
-    state_sender: Sender<state::QueryFn>,
+    state: StateOps,
     task_sender: Sender<Signal>,
 }
 
 impl Drop for WPool {
     fn drop(&mut self) {
-        self.state_sender.drop();
+        self.state.drop_sender();
         if let Some(handle) = self.state_manager_handle.take() {
             let _ = handle.join();
         }
@@ -47,15 +49,18 @@ impl WPool {
         assert!(max_workers >= min_workers, "min_workers > max_workers");
 
         let task_channel = unbounded();
-        let state_channel = unbounded();
+        let state_channel = unbounded::<state::QueryFn>();
 
+        let state = StateOps::new(state_channel.clone_sender());
         let state_manager_handle = state::spawn_manager(state_channel.clone_receiver(), None);
-        let dispatcher_handle = dispatcher::spawn(
+
+        let dispatcher = Dispatcher::new(
             min_workers,
             max_workers,
             task_channel.clone_receiver(),
-            state_channel.clone_sender(),
+            state.clone(),
         );
+        let dispatcher_handle = Self::spawn_dispatcher(dispatcher);
 
         let panics = Mutex::new(Vec::new()).into();
         let panics_clone = Arc::clone(&panics);
@@ -72,7 +77,7 @@ impl WPool {
             shutdown_lock: unbounded().into(),
             stop_once: Once::new(),
             state_manager_handle: Some(state_manager_handle),
-            state_sender: state_channel.clone_sender(),
+            state,
             task_sender: task_channel.clone_sender(),
         }
     }
@@ -184,7 +189,7 @@ impl WPool {
     /// ```
     ///
     pub fn worker_count(&self) -> usize {
-        state::get_worker_count(&self.state_sender)
+        self.state.worker_count()
     }
 
     /// Enqueues the given function.
@@ -495,7 +500,7 @@ impl WPool {
 
     #[allow(dead_code)]
     pub(crate) fn waiting_queue_len(&self) -> usize {
-        state::get_waiting_queue_len(&self.state_sender)
+        self.state.waiting_queue_len()
     }
 
     /************************* Private methods ***************************************/
@@ -509,11 +514,11 @@ impl WPool {
     }
 
     fn status(&self) -> WPoolStatus {
-        state::get_pool_status(&self.state_sender)
+        self.state.pool_status()
     }
 
     fn set_status(&self, status: WPoolStatus) {
-        state::set_pool_status(&self.state_sender, status);
+        self.state.set_pool_status(status);
     }
 
     fn shutdown(&self, wait: bool) {
@@ -530,5 +535,31 @@ impl WPool {
         if let Some(handle) = safe_lock(&self.dispatcher_handle).take() {
             let _ = handle.join();
         }
+    }
+
+    // Private Static Methods
+
+    pub(crate) fn spawn_dispatcher<S>(mut strategy: S) -> thread::JoinHandle<()>
+    where
+        S: DispatchStrategy + Send + 'static,
+    {
+        thread::spawn(move || {
+            loop {
+                if !strategy.is_waiting_queue_empty() {
+                    if !strategy.process_waiting_queue() {
+                        break;
+                    }
+                    continue;
+                }
+
+                match strategy.task_receiver().recv_timeout(WORKER_IDLE_TIMEOUT) {
+                    Ok(signal) => strategy.on_signal(signal),
+                    Err(RecvTimeoutError::Timeout) => strategy.on_worker_timeout(),
+                    Err(_) => break,
+                }
+            }
+
+            strategy.on_shutdown();
+        })
     }
 }
