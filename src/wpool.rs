@@ -51,14 +51,14 @@ impl WPool {
         let task_channel = unbounded();
         let state_channel = unbounded::<state::QueryFn>();
 
-        let state = StateOps::new(state_channel.clone_sender());
+        let state_ops = StateOps::new(state_channel.clone_sender());
         let state_manager_handle = state::spawn_manager(state_channel.clone_receiver(), None);
 
         let dispatcher = Dispatcher::new(
             min_workers,
             max_workers,
             task_channel.clone_receiver(),
-            state.clone(),
+            state_ops.clone(),
         );
         let dispatcher_handle = Self::spawn_dispatcher(dispatcher);
 
@@ -77,7 +77,7 @@ impl WPool {
             shutdown_lock: unbounded().into(),
             stop_once: Once::new(),
             state_manager_handle: Some(state_manager_handle),
-            state,
+            state: state_ops,
             task_sender: task_channel.clone_sender(),
         }
     }
