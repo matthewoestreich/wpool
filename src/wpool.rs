@@ -411,13 +411,13 @@ impl WPool {
     /// ```
     ///
     pub fn pause(&self) {
-        // Acquire lock for duration of this process, so we aren't interrupted by a shutdown.
-        let resume_signal = safe_lock(&self.shutdown_lock);
-
         let status = self.status();
         if matches!(status, WPoolStatus::Stopped(_)) || status == WPoolStatus::Paused {
             return;
         }
+        
+        // Acquire lock for duration of this process, so we aren't interrupted by a shutdown.
+        let resume_signal = safe_lock(&self.shutdown_lock);
 
         let is_ready = WaitGroup::new_with_delta(self.max_workers);
 
