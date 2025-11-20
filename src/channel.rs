@@ -187,7 +187,7 @@ impl<T> std::fmt::Debug for ChannelKind<T> {
     }
 }
 
-/********************** Channell ***************************************/
+/********************** Channel ****************************************/
 
 #[derive(Debug)]
 pub(crate) struct Channel<T> {
