@@ -375,15 +375,13 @@ impl Signal {
 impl Display for Signal {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            Signal::NewTask(_, opt) => write!(
-                f,
-                "Signal::NewTask(Task{})",
-                if safe_lock(opt).is_some() {
-                    ", Confirm"
+            Signal::NewTask(_, confirm) => {
+                if safe_lock(confirm).is_some() {
+                    write!(f, "Signal::NewTask(Task, Confirm)")
                 } else {
-                    ""
+                    write!(f, "Signal::NewTask(Task)")
                 }
-            ),
+            }
             Signal::Terminate => write!(f, "Signal::Terminate"),
         }
     }
