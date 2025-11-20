@@ -49,18 +49,17 @@ impl WPool {
         assert!(max_workers >= min_workers, "min_workers > max_workers");
 
         let task_channel = unbounded();
-        let state_channel = unbounded::<state::QueryFn>();
+        let state_channel = unbounded();
 
         let state_ops = StateOps::new(state_channel.clone_sender());
         let state_manager_handle = state::spawn_manager(state_channel.clone_receiver(), None);
 
-        let dispatcher = Dispatcher::new(
+        let dispatcher_handle = Self::spawn_dispatcher(Dispatcher::new(
             min_workers,
             max_workers,
             task_channel.clone_receiver(),
             state_ops.clone(),
-        );
-        let dispatcher_handle = Self::spawn_dispatcher(dispatcher);
+        ));
 
         let panics = Mutex::new(Vec::new()).into();
         let panics_clone = Arc::clone(&panics);
