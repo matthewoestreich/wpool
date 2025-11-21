@@ -246,6 +246,7 @@ pub mod pacer;
 pub use wpool::WPool;
 
 use std::{
+    any::Any,
     fmt::{self, Display, Formatter},
     panic::RefUnwindSafe,
     sync::{
@@ -257,7 +258,7 @@ use std::{
 
 use crate::channel::Sender;
 
-/************************************* [PUBLIC] PanicInfo ********************************/
+/************************************* [PUBLIC] PanicReport ******************************/
 
 /// `PanicInfo` displays panic information.
 #[derive(Clone, Debug)]
@@ -267,37 +268,27 @@ pub struct PanicReport {
     pub backtrace: String,
 }
 
-/*
-#[derive(Clone, Debug)]
-pub struct PanicInfo {
-    pub thread_id: ThreadId,
-    pub payload: Option<String>,
-    pub file: Option<String>,
-    pub line: Option<u32>,
-    pub column: Option<u32>,
-}
+impl TryFrom<Result<(), Box<dyn Any + Send>>> for PanicReport {
+    type Error = ();
 
-impl From<&PanicHookInfo<'_>> for PanicInfo {
-    fn from(info: &PanicHookInfo) -> Self {
-        let mut this = Self {
-            thread_id: thread::current().id(),
-            payload: None,
-            file: None,
-            line: None,
-            column: None,
-        };
-
-        if let Some(location) = info.location() {
-            this.file = Some(location.file().to_string());
-            this.line = Some(location.line());
-            this.column = Some(location.column());
+    fn try_from(value: Result<(), Box<dyn Any + Send>>) -> Result<Self, Self::Error> {
+        if let Err(task_err) = value {
+            let panic_report = PanicReport {
+                thread_id: std::thread::current().id(),
+                message: if let Some(s) = task_err.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = task_err.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "-".to_string()
+                },
+                backtrace: std::backtrace::Backtrace::force_capture().to_string(),
+            };
+            return Ok(panic_report);
         }
-
-        this.payload = info.payload_as_str().map(|s| s.to_string());
-        this
+        Err(())
     }
 }
-*/
 
 /************************************* safe_lock *****************************************/
 

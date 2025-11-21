@@ -31,6 +31,8 @@ pub(crate) struct SharedData {
     // is the only thread that needs access to it (it owns the waiting queue) and storing
     // just the count means less overhead.
     pub(crate) waiting_queue_length: usize,
+    // Store panic reports for tasks that have panicked. The caller may retrieve these
+    // reports by calling a method on the pool.
     pub(crate) panic_reports: Vec<PanicReport>,
 }
 
@@ -64,8 +66,8 @@ pub(crate) fn spawn_manager(
 ) -> JoinHandle<()> {
     let mut state = initial_state.unwrap_or_default();
     thread::spawn(move || {
-        while let Ok(query) = receiver.recv() {
-            match query {
+        while let Ok(received) = receiver.recv() {
+            match received {
                 Message::Callback(callback_fn) => callback_fn(&mut state),
                 Message::TaskPanic(panic_info) => {
                     state.panic_reports.push(panic_info);
@@ -74,9 +76,12 @@ pub(crate) fn spawn_manager(
                     if let Some(mut handle_opt) = state.worker_handles.remove(&id)
                         && let Some(handle) = handle_opt.take()
                     {
+                        // Call `.join` from a separate thread so the state manager does not block.
                         // Do not decrement worker count here. That is something the caller needs
                         // to explicitly handle from the callsite.
-                        let _ = handle.join();
+                        let _ = thread::spawn(move || {
+                            let _ = handle.join();
+                        });
                     }
                 }
                 Message::InsertWorker(thread_id, join_handle) => {

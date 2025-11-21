@@ -1,4 +1,4 @@
-use std::{any::Any, backtrace::Backtrace, thread};
+use std::{panic::catch_unwind, thread};
 
 use crate::{
     PanicReport, Signal,
@@ -25,9 +25,9 @@ pub(crate) fn spawn(
             match signal_opt.take().expect("is_some()") {
                 Signal::Terminate => break,
                 Signal::NewTask(task, _) => {
-                    let task_result = std::panic::catch_unwind(|| task.run());
-                    if let Some(panic_report) = parse_task_result_errors(task_result) {
-                        let _ = thread_state_sender.send(Message::TaskPanic(panic_report));
+                    let task_result = catch_unwind(|| task.run());
+                    if let Ok(pr) = PanicReport::try_from(task_result) {
+                        let _ = thread_state_sender.send(Message::TaskPanic(pr));
                     }
                 }
             }
@@ -41,22 +41,4 @@ pub(crate) fn spawn(
     });
 
     let _ = state_sender.send(Message::InsertWorker(handle.thread().id(), Some(handle)));
-}
-
-fn parse_task_result_errors(task_result: Result<(), Box<dyn Any + Send>>) -> Option<PanicReport> {
-    if let Err(task_err) = task_result {
-        let panic_report = PanicReport {
-            thread_id: thread::current().id(),
-            message: if let Some(s) = task_err.downcast_ref::<&str>() {
-                s.to_string()
-            } else if let Some(s) = task_err.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "-".to_string()
-            },
-            backtrace: Backtrace::force_capture().to_string(),
-        };
-        return Some(panic_report);
-    }
-    None
 }
