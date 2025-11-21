@@ -411,12 +411,14 @@ fn test_thread_guardian_multiple_panics_in_worker() {
 fn test_get_workers_panic_info() {
     let wp = WPool::new(2);
 
-    wp.submit_confirm(move || {
+    wp.submit_wait(move || {
         panic!("one");
     });
 
+    wp.pause();
     let p = wp.get_workers_panic_info();
-    println!("{p:?}");
+
+    println!("panic_info = {p:?}");
     assert_eq!(p.len(), 1);
     wp.stop_wait();
 }

@@ -239,6 +239,7 @@ mod tests;
 mod channel;
 mod dispatcher;
 mod state;
+mod worker;
 mod wpool;
 
 pub mod pacer;
@@ -246,12 +247,12 @@ pub use wpool::WPool;
 
 use std::{
     fmt::{self, Display, Formatter},
-    panic::PanicHookInfo,
+    panic::RefUnwindSafe,
     sync::{
-        Arc, Condvar, Mutex, MutexGuard, Once,
+        Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicUsize, Ordering},
     },
-    thread::{self, ThreadId},
+    thread::ThreadId,
 };
 
 use crate::channel::Sender;
@@ -259,6 +260,14 @@ use crate::channel::Sender;
 /************************************* [PUBLIC] PanicInfo ********************************/
 
 /// `PanicInfo` displays panic information.
+#[derive(Clone, Debug)]
+pub struct PanicReport {
+    pub thread_id: ThreadId,
+    pub message: String,
+    pub backtrace: String,
+}
+
+/*
 #[derive(Clone, Debug)]
 pub struct PanicInfo {
     pub thread_id: ThreadId,
@@ -288,6 +297,7 @@ impl From<&PanicHookInfo<'_>> for PanicInfo {
         this
     }
 }
+*/
 
 /************************************* safe_lock *****************************************/
 
@@ -396,7 +406,7 @@ impl fmt::Debug for Signal {
 /*********************************** Task ***********************************************/
 
 pub(crate) struct Task {
-    inner: Arc<dyn Fn() + Send + Sync + 'static>,
+    inner: Arc<dyn Fn() + Send + Sync + RefUnwindSafe + 'static>,
 }
 
 impl Clone for Task {
@@ -422,6 +432,7 @@ impl Task {
         }
     }
 
+    #[allow(dead_code)]
     pub fn noop() -> Self {
         Self {
             inner: Arc::new(|| {}),
@@ -497,131 +508,6 @@ impl WaitGroup {
         let mut guard = safe_lock(&self.inner.lock);
         while self.inner.count.load(Ordering::SeqCst) > 0 {
             guard = self.inner.cvar.wait(guard).unwrap();
-        }
-    }
-}
-
-/************************************* ThreadGuardian ************************************/
-
-/// `ThreadGuardian` allows registering a one-time panic handler that consumes `args`.
-/// `on_panic` can only be called once. The handler will run if the thread panics.
-///
-/// You can pass any args you want to ThreadGuardian during instantiation, just wrap them
-/// in a tuple and you will have access to them in the `on_panic` method.
-///
-/// You must tie your instance to a variable that will be dropped when the thread ends!
-/// Even if it is not used, othrwise this will not work!
-///
-/// # Examples
-///
-/// ## Use any args in `on_panic`
-///
-/// ```rust
-/// #[cfg(test)]
-/// {
-///     use std::thread;
-///     use wpool::ThreadGuardian;
-///
-///     #[derive(Clone)]
-///     struct Foo { foo: u8 };
-///     #[derive(Clone)]
-///     struct Bar { bar: u8 };
-///     #[derive(Clone)]
-///     struct Baz { baz: u8 };
-///
-///     let foo = Foo { foo: 1 };
-///     let bar = Bar { bar: 2 };
-///     let baz = Baz { baz: 3 };
-///
-///     thread::spawn(move || {
-///         // Any args needed in `on_panic` should be passed to `new()` as a tuple.
-///         // The order of args is the same order you will receive them!
-///         let tg_args = (foo.clone(), bar.clone(), baz.clone());
-///     
-///         // Pass them to `ThreadGuardian::new()`:
-///         let tg = ThreadGuardian::new(tg_args);
-///     
-///         // Use them in `on_panic(...)` handler: (args are passed back to you in the same order we received them)
-///         tg.on_panic(|(foo, bar, baz)| {
-///             // Handle thread panic:
-///             println!("{foo:?} {bar:?} {baz:?}");
-///         });
-///
-///         // If this thread panicked, `tg.on_panic` would be called.
-///         /* panic!("uh-oh!"); */
-///     });
-/// }
-/// ```
-///
-/// ## Without args
-///
-/// ```rust
-/// #[cfg(test)]
-/// {
-///     use wpool::ThreadGuardian;
-///     // Pass empty tuple:
-///     let tg = ThreadGuardian::new(());
-///     // Underscore for args:
-///     tg.on_panic(|_| {
-///         println!("do work!");
-///     });
-/// }
-/// ```
-///
-/// ## Must tie instance to variable!
-///
-/// ```rust,ignore
-/// // This won't work:
-/// ThreadGuardian::new((...)).on_panic(|_| { ... });
-/// // You must tie your instance to a variable that is dropped
-/// // when the thread ends:
-/// let tg = ThreadGuardian::new((...));
-/// tg.on_panic(|_| { ... });
-/// ```
-pub(crate) struct ThreadGuardian<T>
-where
-    T: Send + 'static,
-{
-    once: Once,
-    args: Mutex<Option<T>>,
-    run_on_panic_fn: Mutex<Option<Box<dyn FnOnce() + Send + 'static>>>,
-}
-
-impl<T> ThreadGuardian<T>
-where
-    T: Send + 'static,
-{
-    pub(crate) fn new(args: T) -> Self {
-        Self {
-            once: Once::new(),
-            args: Mutex::new(Some(args)),
-            run_on_panic_fn: Mutex::new(None),
-        }
-    }
-
-    /// Can only be called one time per instance.
-    pub(crate) fn on_panic<F>(&self, handler: F)
-    where
-        F: FnOnce(T) + Send + 'static,
-    {
-        self.once.call_once(|| {
-            let args = safe_lock(&self.args)
-                .take()
-                .expect("on_panic to be called once");
-            *safe_lock(&self.run_on_panic_fn) = Some(Box::new(move || handler(args)));
-        });
-    }
-}
-
-impl<T> Drop for ThreadGuardian<T>
-where
-    T: Send + 'static,
-{
-    fn drop(&mut self) {
-        if thread::panicking()
-            && let Some(f) = safe_lock(&self.run_on_panic_fn).take()
-        {
-            f();
         }
     }
 }

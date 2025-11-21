@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    AsWPoolStatus, WPoolStatus,
+    AsWPoolStatus, PanicReport, WPoolStatus,
     channel::{Receiver, Sender, bounded},
 };
 
@@ -31,6 +31,7 @@ pub(crate) struct SharedData {
     // is the only thread that needs access to it (it owns the waiting queue) and storing
     // just the count means less overhead.
     pub(crate) waiting_queue_length: usize,
+    pub(crate) panic_reports: Vec<PanicReport>,
 }
 
 /******** IF YOU ARE ADDING STATE YOU ALSO NEED TO INCLUDE A DEFAULT VALUE HERE! *********/
@@ -41,28 +42,53 @@ impl Default for SharedData {
             worker_handles: HashMap::new(),
             pool_status: WPoolStatus::Running.as_u8(),
             waiting_queue_length: 0,
+            panic_reports: Vec::new(),
         }
     }
 }
 
-pub(crate) type QueryFn = Box<dyn FnOnce(&mut SharedData) + Send>;
+pub(crate) type CallbackFn = Box<dyn FnOnce(&mut SharedData) + Send>;
+
+pub(crate) enum Message {
+    Callback(CallbackFn),
+    WokerTerminating(ThreadId),
+    InsertWorker(ThreadId, Option<JoinHandle<()>>),
+    TaskPanic(PanicReport),
+}
 
 /// Spawn a state manager thread. The state manager is the source of truth for all shared state.
 /// It listens for state mutation requests and state retreival requests.
 pub(crate) fn spawn_manager(
-    receiver: Receiver<QueryFn>,
+    receiver: Receiver<Message>,
     initial_state: Option<SharedData>,
 ) -> JoinHandle<()> {
     let mut state = initial_state.unwrap_or_default();
     thread::spawn(move || {
-        while let Ok(query_fn) = receiver.recv() {
-            query_fn(&mut state)
+        while let Ok(query) = receiver.recv() {
+            match query {
+                Message::Callback(callback_fn) => callback_fn(&mut state),
+                Message::TaskPanic(panic_info) => {
+                    state.panic_reports.push(panic_info);
+                }
+                Message::WokerTerminating(id) => {
+                    if let Some(mut handle_opt) = state.worker_handles.remove(&id)
+                        && let Some(handle) = handle_opt.take()
+                    {
+                        // Do not decrement worker count here. That is something the caller needs
+                        // to explicitly handle from the callsite.
+                        let _ = handle.join();
+                    }
+                }
+                Message::InsertWorker(thread_id, join_handle) => {
+                    state.worker_handles.insert(thread_id, join_handle);
+                }
+            }
         }
     })
 }
 
 /// Provide a query function (callback function) that is passed a mutable refernce to current state.
-pub(crate) fn query<R, F>(sender: &Sender<QueryFn>, query_fn: F) -> R
+pub(crate) fn query<R, F>(sender: &Sender<Message>, query_fn: F) -> R
 where
     R: Send + std::fmt::Debug + 'static,
     F: FnOnce(&mut SharedData) -> R + Send + 'static,
@@ -72,17 +98,17 @@ where
     let closure = move |state: &mut SharedData| {
         let _ = reply.send(query_fn(state));
     };
-    sender.send(Box::new(closure)).unwrap();
+    let _ = sender.send(Message::Callback(Box::new(closure)));
     chan.recv().expect("state to exist")
 }
 
 #[derive(Clone)]
 pub(crate) struct StateOps {
-    sender: Sender<QueryFn>,
+    sender: Sender<Message>,
 }
 
 impl StateOps {
-    pub(crate) fn new(sender: Sender<QueryFn>) -> Self {
+    pub(crate) fn new(sender: Sender<Message>) -> Self {
         Self { sender }
     }
 
@@ -90,7 +116,7 @@ impl StateOps {
         self.sender.drop();
     }
 
-    pub(crate) fn clone_sender(&self) -> Sender<QueryFn> {
+    pub(crate) fn clone_sender(&self) -> Sender<Message> {
         self.sender.clone()
     }
 
@@ -122,6 +148,10 @@ impl StateOps {
 
     pub(crate) fn set_waiting_queue_len(&self, len: usize) {
         query(&self.sender, move |state| state.waiting_queue_length = len);
+    }
+
+    pub(crate) fn panic_reports(&self) -> Vec<PanicReport> {
+        query(&self.sender, |state| state.panic_reports.clone())
     }
 
     #[allow(dead_code)]

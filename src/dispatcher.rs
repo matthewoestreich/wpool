@@ -1,13 +1,10 @@
-use std::{
-    collections::VecDeque,
-    sync::{Mutex, mpsc::TryRecvError},
-    thread::{self},
-};
+use std::{collections::VecDeque, sync::mpsc::TryRecvError};
 
 use crate::{
-    Signal, Task, ThreadGuardian, WPoolStatus,
-    channel::{Channel, Receiver, Sender, bounded},
-    state::{QueryFn, StateOps},
+    Signal, WPoolStatus,
+    channel::{Channel, Receiver, bounded},
+    state::StateOps,
+    worker,
 };
 
 pub(crate) trait DispatchStrategy {
@@ -45,51 +42,6 @@ impl Dispatcher {
             task_receiver,
             worker_channel: bounded(0),
         }
-    }
-
-    /// Spawns a new thread that runs signall tasks. A worker thread will run
-    /// the signal task that was given to it during creation, then listen for
-    /// new tasks on the worker channel. ThreadGuardian is responsible for
-    /// respawning a thread if one happens to panic.
-    pub(crate) fn spawn_worker(
-        signal: Signal,
-        worker_receiver: &Receiver<Signal>,
-        state_sender: Sender<QueryFn>,
-    ) {
-        let worker_receiver_clone = worker_receiver.clone();
-        let tg_worker_receiver = worker_receiver.clone();
-        let tg_state_sender = state_sender.clone();
-
-        let handle = thread::spawn(move || {
-            let tg = ThreadGuardian::new((
-                Signal::NewTask(Task::noop(), Mutex::new(None).into()),
-                tg_worker_receiver,
-                tg_state_sender,
-            ));
-
-            tg.on_panic(move |(signal, worker, state)| {
-                Self::spawn_worker(signal, &worker, state);
-            });
-
-            let mut signal_opt = Some(signal);
-
-            while signal_opt.is_some() {
-                match signal_opt.take().expect("is_some()") {
-                    Signal::Terminate => break,
-                    Signal::NewTask(task, _) => task.run(),
-                }
-                signal_opt = match worker_receiver_clone.recv() {
-                    Ok(signal) => Some(signal),
-                    Err(_) => break,
-                }
-            }
-        });
-
-        let _ = state_sender.send(Box::new(move |state| {
-            state
-                .worker_handles
-                .insert(handle.thread().id(), Some(handle));
-        }));
     }
 }
 
@@ -134,9 +86,9 @@ impl DispatchStrategy for Dispatcher {
             self.waiting_queue.push_back(signal);
             self.state.set_waiting_queue_len(self.waiting_queue.len());
         } else {
-            Self::spawn_worker(
+            worker::spawn(
                 signal,
-                &self.worker_channel.clone_receiver(),
+                self.worker_channel.clone_receiver(),
                 self.state.clone_sender(),
             );
             self.state.inc_worker_count();

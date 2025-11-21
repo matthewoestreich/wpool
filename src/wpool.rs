@@ -1,5 +1,4 @@
 use std::{
-    panic::{self},
     sync::{
         Arc, Mutex, Once,
         mpsc::{self, RecvTimeoutError},
@@ -9,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    PanicInfo, Signal, Task, WPoolStatus, WaitGroup,
+    PanicReport, Signal, Task, WPoolStatus, WaitGroup,
     channel::{Channel, Sender, bounded, unbounded},
     dispatcher::{DispatchStrategy, Dispatcher},
     safe_lock,
@@ -25,7 +24,6 @@ pub struct WPool {
     dispatcher_handle: Mutex<Option<thread::JoinHandle<()>>>,
     max_workers: usize,
     min_workers: usize,
-    panics: Arc<Mutex<Vec<PanicInfo>>>,
     shutdown_lock: Mutex<Channel<()>>,
     stop_once: Once,
     state_manager_handle: Option<thread::JoinHandle<()>>,
@@ -61,18 +59,10 @@ impl WPool {
             state_ops.clone(),
         ));
 
-        let panics = Mutex::new(Vec::new()).into();
-        let panics_clone = Arc::clone(&panics);
-
-        panic::set_hook(Box::new(move |info| {
-            safe_lock(&panics_clone).push(PanicInfo::from(info));
-        }));
-
         Self {
             dispatcher_handle: Some(dispatcher_handle).into(),
             max_workers,
             min_workers,
-            panics,
             shutdown_lock: unbounded().into(),
             stop_once: Once::new(),
             state_manager_handle: Some(state_manager_handle),
@@ -491,8 +481,8 @@ impl WPool {
     /// wp.stop_wait();
     /// ```
     ///
-    pub fn get_workers_panic_info(&self) -> Vec<PanicInfo> {
-        safe_lock(&self.panics).to_vec()
+    pub fn get_workers_panic_info(&self) -> Vec<PanicReport> {
+        self.state.panic_reports()
     }
 
     /************************* Crate methods *****************************************/
