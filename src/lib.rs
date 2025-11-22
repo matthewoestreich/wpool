@@ -268,6 +268,7 @@ pub struct PanicReport {
     pub backtrace: String,
 }
 
+/// To convert `panic::catch_unwind` output to `PanicReport`, if there was an error.
 impl TryFrom<Result<(), Box<dyn Any + Send>>> for PanicReport {
     type Error = ();
 
