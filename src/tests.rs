@@ -341,7 +341,7 @@ fn test_signal_cannot_be_confirmed_more_than_once() {
 
 #[test]
 #[serial_test::serial]
-fn test_get_workers_panic_info() {
+fn test_get_workers_panic_reports() {
     let wp = WPool::new(2);
 
     wp.submit_wait(move || {
