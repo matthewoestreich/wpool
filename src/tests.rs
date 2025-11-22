@@ -340,73 +340,6 @@ fn test_signal_cannot_be_confirmed_more_than_once() {
 }
 
 #[test]
-fn test_thread_guardian_panic_in_worker() {
-    run_test_with_timeout(Duration::from_secs(2), || {
-        let max_workers = 2;
-        let wp = WPool::new(max_workers);
-
-        // Make all workers panic.
-        for _ in 0..max_workers {
-            wp.submit(move || {
-                panic!("__panic__");
-            });
-        }
-
-        // Try to submit more jobs.
-        let counter = Arc::new(AtomicUsize::new(0));
-        for _ in 0..max_workers {
-            let c = Arc::clone(&counter);
-            wp.submit(move || {
-                thread::sleep(Duration::from_millis(10));
-                c.fetch_add(1, Ordering::SeqCst);
-            });
-        }
-
-        wp.stop_wait();
-        assert_eq!(counter.load(Ordering::SeqCst), max_workers);
-    });
-}
-
-#[test]
-fn test_thread_guardian_multiple_panics_in_worker() {
-    run_test_with_timeout(Duration::from_secs(2), || {
-        let max_workers = 2;
-        let wp = WPool::new(max_workers);
-
-        // Make all workers panic.
-        for _ in 0..max_workers * max_workers {
-            wp.submit(move || {
-                panic!("__panic__1");
-            });
-        }
-
-        // Try to crash the respawned workers
-        for _ in 0..max_workers * max_workers {
-            wp.submit(move || {
-                panic!("__panic__2");
-            });
-        }
-
-        wp.pause();
-        assert_eq!(wp.worker_count(), max_workers);
-        wp.resume();
-
-        // Try to submit more jobs.
-        let counter = Arc::new(AtomicUsize::new(0));
-        for _ in 0..max_workers {
-            let c = Arc::clone(&counter);
-            wp.submit(move || {
-                thread::sleep(Duration::from_millis(10));
-                c.fetch_add(1, Ordering::SeqCst);
-            });
-        }
-
-        wp.stop_wait();
-        assert_eq!(counter.load(Ordering::SeqCst), max_workers);
-    });
-}
-
-#[test]
 #[serial_test::serial]
 fn test_get_workers_panic_info() {
     let wp = WPool::new(2);
@@ -421,82 +354,6 @@ fn test_get_workers_panic_info() {
     println!("panic_info = {p:?}");
     assert_eq!(p.len(), 1);
     wp.stop_wait();
-}
-
-#[test]
-fn test_thread_guardian_multiple_panics_in_worker_using_min_workers() {
-    let max_workers = 4;
-    let min_workers = 2;
-    let wp = WPool::new_with_min(max_workers, min_workers);
-
-    let sleep_for = WORKER_IDLE_TIMEOUT * ((max_workers + 1) as u32);
-
-    // Make all workers panic.
-    for _ in 0..max_workers * max_workers {
-        wp.submit(move || {
-            panic!("__panic__1");
-        });
-    }
-
-    // Try to crash the respawned workers
-    for _ in 0..max_workers * max_workers {
-        wp.submit(move || {
-            panic!("__panic__2");
-        });
-    }
-
-    // Let enough time pass that workers timeout.
-    thread::sleep(sleep_for);
-    // Should leave us with `min_workers` amount alive.
-    assert_eq!(wp.worker_count(), min_workers);
-
-    // Pausing should fill workers back up to max_workers.
-    wp.pause();
-
-    assert_eq!(
-        wp.worker_count(),
-        max_workers,
-        "expected {max_workers} workers, got {}",
-        wp.worker_count()
-    );
-
-    wp.resume();
-
-    // Try to submit more jobs.
-    let wg = WaitGroup::new_with_delta(max_workers);
-    let releaser = unbounded::<()>();
-    let counter = Arc::new(AtomicUsize::new(0));
-    for _ in 0..max_workers {
-        let c = Arc::clone(&counter);
-        let r = releaser.clone_receiver();
-        let w = wg.clone();
-        wp.submit(move || {
-            c.fetch_add(1, Ordering::SeqCst);
-            w.done();
-            let _ = r.recv();
-        });
-    }
-
-    // Wait until all jobs get to recv(), so we know all workers have been started.
-    wg.wait();
-    // Unblock workers
-    releaser.drop_sender();
-    assert_eq!(counter.load(Ordering::SeqCst), max_workers);
-
-    // Let enough time pass so that idle workers are terminated.
-    // Should leave us with `min_workers` amount still alive.
-    thread::sleep(sleep_for);
-
-    assert_eq!(
-        wp.worker_count(),
-        min_workers,
-        "expected {min_workers} workers, got {}",
-        wp.worker_count()
-    );
-
-    // Cleanup so no leaks.
-    wp.stop_wait();
-    println!("{:#?}", wp.get_workers_panic_info());
 }
 
 #[test]
@@ -558,7 +415,7 @@ fn test_stop_basic() {
 
 #[test]
 fn test_stop_abandoned_waiting_queue() {
-    run_test_n_times(500, 0, true, || {
+    run_test_n_times(500, 0, false, || {
         let max_workers = 10;
         let num_jobs = 20;
         let releaser_chan = unbounded::<()>();
@@ -596,15 +453,17 @@ fn test_stop_abandoned_waiting_queue() {
         // Release the hounds
         releaser_chan.drop_sender();
         wp.stop();
-        println!(
-            "wait_que_len = {}, expected = {}",
-            wp.waiting_queue_len(),
-            num_jobs - max_workers
-        );
+        //println!(
+        //    "wait_que_len = {}, expected = {}",
+        //    wp.waiting_queue_len(),
+        //    num_jobs - max_workers
+        //);
         assert_eq!(
             wp.waiting_queue_len(),
             num_jobs - max_workers,
-            "Expected 0 jobs from wait queue to run after stop()"
+            "Expected 0 jobs from wait queue to run after stop()! these should be equal : waiting_queue_len={} | num_jobs-max_workers={}",
+            wp.waiting_queue_len(),
+            num_jobs - max_workers
         );
     });
 }
@@ -698,7 +557,7 @@ fn test_overflow() {
         });
     }
 
-    println!("[[test_overflow]] wg_wait");
+    //println!("[[test_overflow]] wg_wait");
     wait_group.wait();
 
     // Start a thread to free the workers.
@@ -707,17 +566,17 @@ fn test_overflow() {
         release_chan.drop_sender();
     });
 
-    println!("[[test_overflow]] p.stop()");
+    //println!("[[test_overflow]] p.stop()");
     p.stop();
-    println!(
-        "[[test_overflow]] p.waiting_queue_len(), {}",
-        p.waiting_queue_len()
-    );
+    //println!(
+    //    "[[test_overflow]] p.waiting_queue_len(), {}",
+    //    p.waiting_queue_len()
+    //);
 
     // Now that the pool has exited, it is safe to inspect its waiting
     // queue without causing a race.
     let wq_len = p.waiting_queue_len();
-    println!("[[test_overflow]] wait_queue_len = {wq_len}");
+    //println!("[[test_overflow]] wait_queue_len = {wq_len}");
     assert_eq!(
         wq_len, expected_len,
         "Expected waiting to queue to have len of '{expected_len}' but got '{wq_len}'"

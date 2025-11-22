@@ -1,11 +1,55 @@
-use std::{collections::VecDeque, sync::mpsc::TryRecvError};
+use std::{
+    collections::VecDeque,
+    sync::mpsc::{RecvTimeoutError, TryRecvError},
+    thread,
+};
 
 use crate::{
     Signal, WPoolStatus,
     channel::{Channel, Receiver, bounded},
     state::StateOps,
     worker,
+    wpool::WORKER_IDLE_TIMEOUT,
 };
+
+pub(crate) struct Dispatcher<S>
+where
+    S: DispatchStrategy + Send + 'static,
+{
+    strategy: S,
+}
+
+impl<S> Dispatcher<S>
+where
+    S: DispatchStrategy + Send + 'static,
+{
+    pub(crate) fn new(strat: S) -> Self {
+        Self { strategy: strat }
+    }
+
+    pub(crate) fn spawn(self) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            let mut strategy = self.strategy;
+
+            loop {
+                if !strategy.is_waiting_queue_empty() {
+                    if !strategy.process_waiting_queue() {
+                        break;
+                    }
+                    continue;
+                }
+
+                match strategy.task_receiver().recv_timeout(WORKER_IDLE_TIMEOUT) {
+                    Ok(signal) => strategy.on_signal(signal),
+                    Err(RecvTimeoutError::Timeout) => strategy.on_worker_timeout(),
+                    Err(_) => break,
+                }
+            }
+
+            strategy.on_shutdown();
+        })
+    }
+}
 
 pub(crate) trait DispatchStrategy {
     fn task_receiver(&self) -> &Receiver<Signal>;
@@ -16,7 +60,7 @@ pub(crate) trait DispatchStrategy {
     fn on_shutdown(&mut self);
 }
 
-pub(crate) struct Dispatcher {
+pub(crate) struct DefaultDispatchStrategy {
     min_workers: usize,
     max_workers: usize,
     waiting_queue: VecDeque<Signal>,
@@ -26,7 +70,7 @@ pub(crate) struct Dispatcher {
     worker_channel: Channel<Signal>,
 }
 
-impl Dispatcher {
+impl DefaultDispatchStrategy {
     pub(crate) fn new(
         min_workers: usize,
         max_workers: usize,
@@ -45,7 +89,7 @@ impl Dispatcher {
     }
 }
 
-impl DispatchStrategy for Dispatcher {
+impl DispatchStrategy for DefaultDispatchStrategy {
     fn is_waiting_queue_empty(&self) -> bool {
         self.waiting_queue.is_empty()
     }
