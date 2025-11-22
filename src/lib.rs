@@ -247,13 +247,14 @@ pub use wpool::WPool;
 
 use std::{
     any::Any,
+    backtrace::Backtrace,
     fmt::{self, Display, Formatter},
     panic::RefUnwindSafe,
     sync::{
         Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicUsize, Ordering},
     },
-    thread::ThreadId,
+    thread::{self, ThreadId},
 };
 
 use crate::channel::Sender;
@@ -275,7 +276,7 @@ impl TryFrom<Result<(), Box<dyn Any + Send>>> for PanicReport {
     fn try_from(value: Result<(), Box<dyn Any + Send>>) -> Result<Self, Self::Error> {
         if let Err(task_err) = value {
             let panic_report = PanicReport {
-                thread_id: std::thread::current().id(),
+                thread_id: thread::current().id(),
                 message: if let Some(s) = task_err.downcast_ref::<&str>() {
                     s.to_string()
                 } else if let Some(s) = task_err.downcast_ref::<String>() {
@@ -283,7 +284,7 @@ impl TryFrom<Result<(), Box<dyn Any + Send>>> for PanicReport {
                 } else {
                     "-".to_string()
                 },
-                backtrace: std::backtrace::Backtrace::force_capture().to_string(),
+                backtrace: Backtrace::force_capture().to_string(),
             };
             return Ok(panic_report);
         }
