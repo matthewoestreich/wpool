@@ -12,6 +12,8 @@ use crate::{
     wpool::WORKER_IDLE_TIMEOUT,
 };
 
+/******************** Dispatcher *************************************/
+
 pub(crate) struct Dispatcher<S>
 where
     S: DispatchStrategy + Send + 'static,
@@ -51,6 +53,8 @@ where
     }
 }
 
+/******************** DispatcherStrategy *****************************/
+
 pub(crate) trait DispatchStrategy {
     fn task_receiver(&self) -> &Receiver<Signal>;
     fn is_waiting_queue_empty(&self) -> bool;
@@ -59,6 +63,8 @@ pub(crate) trait DispatchStrategy {
     fn on_worker_timeout(&mut self);
     fn on_shutdown(&mut self);
 }
+
+/******************** DefaultDispatchStrategy ************************/
 
 pub(crate) struct DefaultDispatchStrategy {
     min_workers: usize,
