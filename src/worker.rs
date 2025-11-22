@@ -6,10 +6,9 @@ use crate::{
     state::Message,
 };
 
-/// Spawns a new thread that runs signall tasks. A worker thread will run
+/// Spawns a new thread that runs signal tasks. A worker thread will run
 /// the signal task that was given to it during creation, then listen for
-/// new tasks on the worker channel. ThreadGuardian is responsible for
-/// respawning a thread if one happens to panic.
+/// new tasks on the worker channel.
 pub(crate) fn spawn(
     signal: Signal,
     worker_receiver: Receiver<Signal>,
