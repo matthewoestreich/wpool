@@ -432,7 +432,7 @@ fn test_stop_abandoned_waiting_queue() {
             wp.submit(move || {
                 ready.done();
                 let _ = receiver.recv();
-                thread::sleep(Duration::from_millis(7));
+                thread::sleep(Duration::from_millis(10));
             });
         }
 
