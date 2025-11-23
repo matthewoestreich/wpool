@@ -15,7 +15,13 @@ categories = ["asynchronous", "concurrency"]
 
 [dev-dependencies]
 serial_test = "3.2.0"
+criterion = "0.7.0"
+
+[[bench]]
+name = "wpool_bench"
+harness = false
 
 [lib]
 name = "wpool"
 path = "src/lib.rs"
+
