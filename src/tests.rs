@@ -263,17 +263,23 @@ fn test_zero_max_workers() {
 }
 
 #[test]
-fn test_state_manager_thread_id_is_same_as_callback() {
+fn test_state_callbacks_run_on_state_manager_thread() {
+    // To verify this we compare thread ids.
+    // One of the ids is retrieved via Callback message.
+    // The other is received from a custom message (which the state mgr thread handles and runs)
     let wp = WPool::new(3);
     let id_from_closure = query(&wp.state.sender, |_| thread::current().id());
     let chan = bounded(0);
     let msg = state::Message::GetStateManagerThreadId(chan.clone_sender());
     let _ = wp.state.sender.send(msg);
     if let Ok(id_from_query) = chan.recv() {
-        println!(
+        assert_eq!(
+            id_from_query, id_from_closure,
             "from_closure = {:?} | from_query = {:?}",
             id_from_closure, id_from_query
         );
+    } else {
+        panic!("unable to get state manager thread id via query!");
     }
 }
 
