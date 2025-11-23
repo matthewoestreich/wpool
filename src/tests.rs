@@ -415,7 +415,7 @@ fn test_stop_basic() {
 
 #[test]
 fn test_stop_abandoned_waiting_queue() {
-    run_test_n_times(500, 0, true, || {
+    run_test_n_times(500, 0, false, || {
         let max_workers = 10;
         let num_jobs = 20;
         let releaser_chan = unbounded::<()>();
@@ -432,7 +432,7 @@ fn test_stop_abandoned_waiting_queue() {
             wp.submit(move || {
                 ready.done();
                 let _ = receiver.recv();
-                thread::sleep(Duration::from_millis(7));
+                thread::sleep(Duration::from_millis(10));
             });
         }
 
@@ -453,15 +453,17 @@ fn test_stop_abandoned_waiting_queue() {
         // Release the hounds
         releaser_chan.drop_sender();
         wp.stop();
-        println!(
-            "wait_que_len = {}, expected = {}",
-            wp.waiting_queue_len(),
-            num_jobs - max_workers
-        );
+        //println!(
+        //    "wait_que_len = {}, expected = {}",
+        //    wp.waiting_queue_len(),
+        //    num_jobs - max_workers
+        //);
         assert_eq!(
             wp.waiting_queue_len(),
             num_jobs - max_workers,
-            "Expected 0 jobs from wait queue to run after stop()"
+            "Expected 0 jobs from wait queue to run after stop()! these should be equal : waiting_queue_len={} | num_jobs-max_workers={}",
+            wp.waiting_queue_len(),
+            num_jobs - max_workers
         );
     });
 }
@@ -555,7 +557,7 @@ fn test_overflow() {
         });
     }
 
-    println!("[[test_overflow]] wg_wait");
+    //println!("[[test_overflow]] wg_wait");
     wait_group.wait();
 
     // Start a thread to free the workers.
@@ -564,17 +566,17 @@ fn test_overflow() {
         release_chan.drop_sender();
     });
 
-    println!("[[test_overflow]] p.stop()");
+    //println!("[[test_overflow]] p.stop()");
     p.stop();
-    println!(
-        "[[test_overflow]] p.waiting_queue_len(), {}",
-        p.waiting_queue_len()
-    );
+    //println!(
+    //    "[[test_overflow]] p.waiting_queue_len(), {}",
+    //    p.waiting_queue_len()
+    //);
 
     // Now that the pool has exited, it is safe to inspect its waiting
     // queue without causing a race.
     let wq_len = p.waiting_queue_len();
-    println!("[[test_overflow]] wait_queue_len = {wq_len}");
+    //println!("[[test_overflow]] wait_queue_len = {wq_len}");
     assert_eq!(
         wq_len, expected_len,
         "Expected waiting to queue to have len of '{expected_len}' but got '{wq_len}'"

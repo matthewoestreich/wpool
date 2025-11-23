@@ -1,7 +1,7 @@
 use std::{
     sync::{
         Arc, Mutex, Once,
-        mpsc::{self, RecvTimeoutError},
+        mpsc::{self},
     },
     thread,
     time::Duration,
@@ -10,7 +10,7 @@ use std::{
 use crate::{
     PanicReport, Signal, Task, WPoolStatus, WaitGroup,
     channel::{Channel, Sender, bounded, unbounded},
-    dispatcher::{DispatchStrategy, Dispatcher},
+    dispatcher::{DefaultDispatchStrategy, Dispatcher},
     safe_lock,
     state::{self, StateOps},
 };
@@ -52,7 +52,7 @@ impl WPool {
         let state_ops = StateOps::new(state_channel.clone_sender());
         let state_manager_handle = state::spawn_manager(state_channel.clone_receiver(), None);
 
-        let dispatcher_handle = Self::spawn_dispatcher(Dispatcher::new(
+        let dispatcher = Dispatcher::new(DefaultDispatchStrategy::new(
             min_workers,
             max_workers,
             task_channel.clone_receiver(),
@@ -60,7 +60,7 @@ impl WPool {
         ));
 
         Self {
-            dispatcher_handle: Some(dispatcher_handle).into(),
+            dispatcher_handle: Some(dispatcher.spawn()).into(),
             max_workers,
             min_workers,
             shutdown_lock: unbounded().into(),
@@ -524,31 +524,5 @@ impl WPool {
         if let Some(handle) = safe_lock(&self.dispatcher_handle).take() {
             let _ = handle.join();
         }
-    }
-
-    // Private Static Methods
-
-    pub(crate) fn spawn_dispatcher<S>(mut strategy: S) -> thread::JoinHandle<()>
-    where
-        S: DispatchStrategy + Send + 'static,
-    {
-        thread::spawn(move || {
-            loop {
-                if !strategy.is_waiting_queue_empty() {
-                    if !strategy.process_waiting_queue() {
-                        break;
-                    }
-                    continue;
-                }
-
-                match strategy.task_receiver().recv_timeout(WORKER_IDLE_TIMEOUT) {
-                    Ok(signal) => strategy.on_signal(signal),
-                    Err(RecvTimeoutError::Timeout) => strategy.on_worker_timeout(),
-                    Err(_) => break,
-                }
-            }
-
-            strategy.on_shutdown();
-        })
     }
 }
