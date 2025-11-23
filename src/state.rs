@@ -56,6 +56,9 @@ pub(crate) enum Message {
     WokerTerminating(ThreadId),
     InsertWorker(ThreadId, Option<JoinHandle<()>>),
     TaskPanic(PanicReport),
+    // This is for use in tests, it does not have a purpose outside of that!
+    #[allow(dead_code)]
+    GetStateManagerThreadId(Sender<ThreadId>),
 }
 
 /// Spawn a state manager thread. The state manager is the source of truth for all shared state.
@@ -68,6 +71,10 @@ pub(crate) fn spawn_manager(
     thread::spawn(move || {
         while let Ok(received) = receiver.recv() {
             match received {
+                // This is used for testing!
+                Message::GetStateManagerThreadId(sender) => {
+                    let _ = sender.send(thread::current().id());
+                }
                 Message::Callback(callback_fn) => callback_fn(&mut state),
                 Message::TaskPanic(panic_info) => {
                     state.panic_reports.push(panic_info);
@@ -109,7 +116,7 @@ where
 
 #[derive(Clone)]
 pub(crate) struct StateOps {
-    sender: Sender<Message>,
+    pub(crate) sender: Sender<Message>,
 }
 
 impl StateOps {
@@ -174,5 +181,11 @@ impl StateOps {
                 }
             }
         })
+    }
+
+    // This is for testing!
+    #[allow(dead_code)]
+    pub(crate) fn get_thread_id_for_testing(&self) -> ThreadId {
+        query(&self.sender, |_| thread::current().id())
     }
 }

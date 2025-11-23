@@ -3,7 +3,7 @@ use std::{
         Arc, Mutex, Once,
         mpsc::{self},
     },
-    thread,
+    thread::{self},
     time::Duration,
 };
 
@@ -27,7 +27,7 @@ pub struct WPool {
     shutdown_lock: Mutex<Channel<()>>,
     stop_once: Once,
     state_manager_handle: Option<thread::JoinHandle<()>>,
-    state: StateOps,
+    pub(crate) state: StateOps,
     task_sender: Sender<Signal>,
 }
 

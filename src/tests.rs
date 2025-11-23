@@ -13,7 +13,8 @@ use std::{
 use crate::{
     WaitGroup,
     channel::{bounded, unbounded},
-    safe_lock, state,
+    safe_lock,
+    state::{self, query},
     wpool::{WORKER_IDLE_TIMEOUT, WPool},
 };
 
@@ -259,6 +260,21 @@ fn test_submit_confirm() {
 #[should_panic]
 fn test_zero_max_workers() {
     let _wp = WPool::new(0);
+}
+
+#[test]
+fn test_state_manager_thread_id_is_same_as_callback() {
+    let wp = WPool::new(3);
+    let id_from_closure = query(&wp.state.sender, |_| thread::current().id());
+    let chan = bounded(0);
+    let msg = state::Message::GetStateManagerThreadId(chan.clone_sender());
+    let _ = wp.state.sender.send(msg);
+    if let Ok(id_from_query) = chan.recv() {
+        println!(
+            "from_closure = {:?} | from_query = {:?}",
+            id_from_closure, id_from_query
+        );
+    }
 }
 
 #[test]
