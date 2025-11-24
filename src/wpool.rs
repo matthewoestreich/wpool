@@ -46,6 +46,12 @@ impl WPool {
         assert!(max_workers > 0, "max_workers == 0");
         assert!(max_workers >= min_workers, "min_workers > max_workers");
 
+        // Always spawn at least one min worker
+        let mut min_workers_final = min_workers;
+        if min_workers_final == 0 {
+            min_workers_final = 1;
+        }
+
         let task_channel = unbounded();
         let state_channel = unbounded();
 
@@ -53,16 +59,27 @@ impl WPool {
         let state_manager_handle = state::spawn_manager(state_channel.clone_receiver(), None);
 
         let dispatcher = Dispatcher::new(DefaultDispatchStrategy::new(
-            min_workers,
+            min_workers_final,
             max_workers,
             task_channel.clone_receiver(),
             state_ops.clone(),
         ));
 
+        // Pre spawn min workers.
+        let s_ops = state_ops.clone();
+        for _ in 0..min_workers_final {
+            s_ops.inc_worker_count();
+            crate::worker::spawn(
+                Signal::NewTask(Task::noop(), Arc::new(Mutex::new(None))),
+                dispatcher.strategy.worker_channel.clone_receiver(),
+                state_channel.clone_sender(),
+            );
+        }
+
         Self {
             dispatcher_handle: Some(dispatcher.spawn()).into(),
             max_workers,
-            min_workers,
+            min_workers: min_workers_final,
             shutdown_lock: unbounded().into(),
             stop_once: Once::new(),
             state_manager_handle: Some(state_manager_handle),

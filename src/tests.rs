@@ -174,6 +174,20 @@ fn test_state_manager_query() {
 }
 
 #[test]
+fn test_min_workers_are_immediately_spawned() {
+    let max_workers = 5;
+    let min_workers = 3;
+    let wp = WPool::new_with_min(max_workers, min_workers);
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        wp.worker_count(),
+        min_workers,
+        "expected {min_workers} min workers, got {}",
+        wp.worker_count()
+    );
+}
+
+#[test]
 fn test_min_workers_basic() {
     let max_workers = 2;
     let min_workers = 1;
@@ -207,8 +221,8 @@ fn test_worker_count_example_in_docs() {
     let max_workers = 5;
     let wp = WPool::new(max_workers);
 
-    // Should have 0 workers here.
-    assert_eq!(wp.worker_count(), 0);
+    // Should have 1 workers here since we always keep one alive.
+    assert_eq!(wp.worker_count(), 1);
 
     for _ in 0..max_workers {
         wp.submit(move || {
@@ -241,8 +255,18 @@ fn test_submit_confirm() {
         });
         // Since we waited for our job to be given to a worker or queued,
         // the worker_count should now reflect that.
-        println!("[[test_submit_confirm]] -> in loop ab to call `wp.worker_count()`");
-        assert_eq!(wp.worker_count(), i);
+        // We always spawn at least one worker, account for that
+        let expected = if i == max_workers { max_workers } else { i + 1 };
+        println!(
+            "[[test_submit_confirm]] -> in loop ab to call `wp.worker_count()` epecting {expected} got {}",
+            wp.worker_count()
+        );
+        assert_eq!(
+            wp.worker_count(),
+            expected,
+            "expected {expected} workers, got {}",
+            wp.worker_count()
+        );
         println!("[[test_submit_confirm]] -> ok : got worker count, on iteration {i}");
     }
 
@@ -251,7 +275,7 @@ fn test_submit_confirm() {
     assert_eq!(wp.worker_count(), max_workers);
 
     wp.stop_wait();
-    // Should have 0 workers now.
+    // Should have 0 workers now
     assert_eq!(wp.worker_count(), 0);
     println!("[[test_submit_confirm]] -> done")
 }
@@ -1227,14 +1251,17 @@ fn test_worker_count() {
     let max_workers = 10;
     let mut count = 0;
     let wp = WPool::new(max_workers);
-    for i in 0..max_workers {
+    for i in 1..=max_workers {
         wp.submit(|| {
             thread::sleep(Duration::from_millis(10));
         });
         thread::sleep(Duration::from_millis(3));
         count = wp.worker_count();
-        assert_eq!(i + 1, count);
+        let expected = if i == max_workers { max_workers } else { i + 1 };
+        println!("expected {expected} got {count}");
+        assert_eq!(expected, count);
     }
+    // We always keep at least one worker alive
     assert_eq!(count, max_workers);
     wp.stop_wait();
 }

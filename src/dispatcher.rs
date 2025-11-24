@@ -18,7 +18,7 @@ pub(crate) struct Dispatcher<S>
 where
     S: DispatchStrategy + Send + 'static,
 {
-    strategy: S,
+    pub(crate) strategy: S,
 }
 
 impl<S> Dispatcher<S>
@@ -73,7 +73,7 @@ pub(crate) struct DefaultDispatchStrategy {
     is_idle: bool,
     state: StateOps,
     task_receiver: Receiver<Signal>,
-    worker_channel: Channel<Signal>,
+    pub(crate) worker_channel: Channel<Signal>,
 }
 
 impl DefaultDispatchStrategy {
