@@ -59,4 +59,3 @@ fn bench_submit_small_tasks(c: &mut Criterion) {
 
 criterion_group!(benches, bench_submit_small_tasks);
 criterion_main!(benches);
-
