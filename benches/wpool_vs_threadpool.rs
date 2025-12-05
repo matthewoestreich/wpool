@@ -26,7 +26,7 @@ fn bench_submit_small_tasks(c: &mut Criterion) {
                     std::hint::black_box(x);
                 });
             }
-            pool.stop_wait(); // OR pool.join() depending on your API
+            pool.stop_wait();
         })
     });
 

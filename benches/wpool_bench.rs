@@ -34,8 +34,8 @@ fn bench_submit_small_tasks(c: &mut Criterion) {
                     std::hint::black_box(x);
                 });
             }
-            pool.stop();
-        })
+            pool.stop_wait();
+        });
     });
 
     // ---- Rayon ----
