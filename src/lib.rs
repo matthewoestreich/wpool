@@ -236,7 +236,6 @@
 #[cfg(test)]
 mod tests;
 
-mod channel;
 mod dispatcher;
 mod state;
 mod worker;
@@ -249,7 +248,7 @@ use std::{
     any::Any,
     backtrace::Backtrace,
     fmt::{self, Display, Formatter},
-    panic::RefUnwindSafe,
+    panic::UnwindSafe,
     sync::{
         Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicUsize, Ordering},
@@ -257,7 +256,8 @@ use std::{
     thread::{self, ThreadId},
 };
 
-use crate::channel::Sender;
+use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
+//use crate::channel::Sender;
 
 /************************************* [PUBLIC] PanicReport ******************************/
 
@@ -299,6 +299,37 @@ pub(crate) fn safe_lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     match m.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/************************************* Channel *******************************************/
+
+#[derive(Clone)]
+pub(crate) struct Channel<T> {
+    pub sender: Sender<T>,
+    pub receiver: Receiver<T>,
+}
+
+impl<T> Channel<T> {
+    pub(crate) fn new_bounded(cap: usize) -> Self {
+        let b = bounded(cap);
+        Self {
+            sender: b.0,
+            receiver: b.1,
+        }
+    }
+
+    pub(crate) fn new_unbounded() -> Self {
+        let ub = unbounded();
+        Self {
+            sender: ub.0,
+            receiver: ub.1,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn drop_sender(self) {
+        drop(self.sender);
     }
 }
 
@@ -360,31 +391,15 @@ impl AsWPoolStatus for u8 {
 
 /*********************************** Signal **********************************************/
 
-#[derive(Clone)]
 pub(crate) enum Signal {
-    NewTask(Task, Arc<Mutex<Option<Sender<()>>>>),
+    NewTask(Task),
     Terminate,
-}
-
-impl Signal {
-    pub(crate) fn take_confirm(&self) -> Option<Sender<()>> {
-        if let Signal::NewTask(_, confirm) = self {
-            return safe_lock(confirm).take();
-        }
-        None
-    }
 }
 
 impl Display for Signal {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            Signal::NewTask(_, confirm) => {
-                if safe_lock(confirm).is_some() {
-                    write!(f, "Signal::NewTask(Task, Confirm)")
-                } else {
-                    write!(f, "Signal::NewTask(Task)")
-                }
-            }
+            Signal::NewTask(_) => write!(f, "Signal::NewTask(Task)"),
             Signal::Terminate => write!(f, "Signal::Terminate"),
         }
     }
@@ -399,41 +414,26 @@ impl fmt::Debug for Signal {
 /*********************************** Task ***********************************************/
 
 pub(crate) struct Task {
-    inner: Arc<dyn Fn() + Send + Sync + RefUnwindSafe + 'static>,
-}
-
-impl Clone for Task {
-    fn clone(&self) -> Self {
-        Task {
-            inner: Arc::clone(&self.inner),
-        }
-    }
+    inner: Box<dyn FnOnce() + Send + Sync + UnwindSafe + 'static>,
 }
 
 impl Task {
-    pub fn new<F>(f: F) -> Self
+    pub(crate) fn new<F>(f: F) -> Self
     where
-        F: FnOnce() + Send + 'static,
+        F: FnOnce() + Send + Sync + UnwindSafe + 'static,
     {
-        let f = Mutex::new(Some(f));
-        Self {
-            inner: Arc::new(move || {
-                if let Some(f) = safe_lock(&f).take() {
-                    f();
-                }
-            }),
-        }
+        Self { inner: Box::new(f) }
+    }
+
+    pub(crate) fn run(self) {
+        (self.inner)();
     }
 
     #[allow(dead_code)]
-    pub fn noop() -> Self {
+    pub(crate) fn noop() -> Self {
         Self {
-            inner: Arc::new(|| {}),
+            inner: Box::new(|| {}),
         }
-    }
-
-    pub fn run(&self) {
-        (self.inner)();
     }
 }
 

@@ -1,16 +1,7 @@
-use std::{
-    collections::VecDeque,
-    sync::mpsc::{RecvTimeoutError, TryRecvError},
-    thread,
-};
+use crossbeam_channel::{Receiver, RecvTimeoutError, TryRecvError, TrySendError};
+use std::{collections::VecDeque, thread};
 
-use crate::{
-    Signal, WPoolStatus,
-    channel::{Channel, Receiver, bounded},
-    state::StateOps,
-    worker,
-    wpool::WORKER_IDLE_TIMEOUT,
-};
+use crate::{Channel, Signal, WPoolStatus, state::SharedData, worker, wpool::WORKER_IDLE_TIMEOUT};
 
 /******************** Dispatcher *************************************/
 
@@ -71,7 +62,7 @@ pub(crate) struct DefaultDispatchStrategy {
     max_workers: usize,
     waiting_queue: VecDeque<Signal>,
     is_idle: bool,
-    state: StateOps,
+    state: SharedData,
     task_receiver: Receiver<Signal>,
     worker_channel: Channel<Signal>,
 }
@@ -81,7 +72,7 @@ impl DefaultDispatchStrategy {
         min_workers: usize,
         max_workers: usize,
         task_receiver: Receiver<Signal>,
-        state: StateOps,
+        state: SharedData,
     ) -> Self {
         Self {
             min_workers,
@@ -90,7 +81,7 @@ impl DefaultDispatchStrategy {
             is_idle: false,
             state,
             task_receiver,
-            worker_channel: bounded(0),
+            worker_channel: Channel::new_bounded(0),
         }
     }
 }
@@ -111,12 +102,12 @@ impl DispatchStrategy for DefaultDispatchStrategy {
                 self.state.set_waiting_queue_len(self.waiting_queue.len());
             }
             Err(TryRecvError::Empty) => {
-                if let Some(signal) = self.waiting_queue.front()
-                    && self.worker_channel.try_send(signal.clone()).is_ok()
-                {
-                    // Only pop off (modify) waitiing queue once we know the
-                    // signal was successfully passed into the worker channel.
-                    self.waiting_queue.pop_front();
+                if let Some(signal) = self.waiting_queue.pop_front() {
+                    if let Err(TrySendError::Full(s) | TrySendError::Disconnected(s)) =
+                        self.worker_channel.sender.try_send(signal)
+                    {
+                        self.waiting_queue.push_front(s)
+                    }
                     self.state.set_waiting_queue_len(self.waiting_queue.len());
                 }
             }
@@ -129,7 +120,7 @@ impl DispatchStrategy for DefaultDispatchStrategy {
     fn on_signal(&mut self, signal: Signal) {
         // Take ownership of confirmation from signal.
         // This is for when `pool.submit_confirm(...)` is called.
-        let signal_confirmation = signal.take_confirm();
+        //let signal_confirmation = signal.take_confirm();
 
         // Process received signal by placing in wait queue or handing to worker.
         if self.state.worker_count() >= self.max_workers {
@@ -138,17 +129,17 @@ impl DispatchStrategy for DefaultDispatchStrategy {
         } else {
             worker::spawn(
                 signal,
-                self.worker_channel.clone_receiver(),
-                self.state.clone_sender(),
+                self.worker_channel.receiver.clone(),
+                self.state.clone(),
             );
             self.state.inc_worker_count();
         }
 
         // [[ IMPORTANT ]] : we only want to send confirmation AFTER we know the worker
         // count has been updated. This is for when `.submit_confirm(...)` is called.
-        if let Some(confirmation) = signal_confirmation {
-            confirmation.drop();
-        }
+        //if let Some(confirmation) = signal_confirmation {
+        //    confirmation.drop();
+        //}
 
         self.is_idle = false;
     }
@@ -156,7 +147,11 @@ impl DispatchStrategy for DefaultDispatchStrategy {
     fn on_worker_timeout(&mut self) {
         if self.is_idle
             && self.state.worker_count() > self.min_workers
-            && self.worker_channel.try_send(Signal::Terminate).is_ok()
+            && self
+                .worker_channel
+                .sender
+                .try_send(Signal::Terminate)
+                .is_ok()
         {
             self.state.dec_worker_count();
         }
@@ -167,13 +162,12 @@ impl DispatchStrategy for DefaultDispatchStrategy {
         // If `stop_wait()` was called run tasks and waiting queue.
         if self.state.pool_status() == WPoolStatus::Stopped(true) {
             while !self.waiting_queue.is_empty() {
-                // Get a reference to element at the front of waiting queue, if exists.
-                if let Some(signal) = self.waiting_queue.front()
-                    && self.worker_channel.try_send(signal.clone()).is_ok()
-                {
-                    // Only pop off (modify) waitiing queue once we know the
-                    // signal was successfully passed into the worker channel.
-                    self.waiting_queue.pop_front();
+                if let Some(signal) = self.waiting_queue.pop_front() {
+                    if let Err(TrySendError::Full(s) | TrySendError::Disconnected(s)) =
+                        self.worker_channel.sender.try_send(signal)
+                    {
+                        self.waiting_queue.push_front(s)
+                    }
                     self.state.set_waiting_queue_len(self.waiting_queue.len());
                 }
             }
@@ -181,7 +175,7 @@ impl DispatchStrategy for DefaultDispatchStrategy {
 
         // Terminate workers as they become available.
         for _ in 0..self.state.worker_count() {
-            let _ = self.worker_channel.send(Signal::Terminate); // Blocking.
+            let _ = self.worker_channel.sender.send(Signal::Terminate); // Blocking.
             self.state.dec_worker_count();
         }
 

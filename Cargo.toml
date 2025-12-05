@@ -11,16 +11,29 @@ readme = "README.md"
 keywords = ["async", "multithreading", "pool", "workerpool", "threadpool"]
 categories = ["asynchronous", "concurrency"]
 
+[profile.release]
+debug = true
+
 [dependencies]
+crossbeam-channel = "0.5.15"
 
 [dev-dependencies]
 serial_test = "3.2.0"
 criterion = "0.7.0"
 rayon = "1.11"
+threadpool = "1.8.1"
 
 [[bench]]
 name = "wpool_bench"
 harness = false
+
+[[bench]]
+name = "wpool_vs_threadpool"
+harness = false
+
+[[bin]]
+name = "wpool_bin"
+path = "bin/main.rs"
 
 [lib]
 name = "wpool"
