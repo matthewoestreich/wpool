@@ -1311,9 +1311,9 @@ fn test_concurrent_submissions() {
         }
     });
 
-    thread::sleep(Duration::from_secs(3));
     let _ = h1.join();
     let _ = h2.join();
+    thread::sleep(Duration::from_secs(3));
 
     assert_eq!(num_jobs_per_thread * 2, counter.load(Ordering::SeqCst));
     wp.stop_wait();
