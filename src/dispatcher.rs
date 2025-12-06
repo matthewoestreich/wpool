@@ -106,7 +106,7 @@ impl DispatchStrategy for DefaultDispatchStrategy {
                     if let Err(TrySendError::Full(s) | TrySendError::Disconnected(s)) =
                         self.worker_channel.sender.try_send(signal)
                     {
-                        self.waiting_queue.push_front(s)
+                        self.waiting_queue.push_front(s);
                     }
                     self.state.set_waiting_queue_len(self.waiting_queue.len());
                 }
