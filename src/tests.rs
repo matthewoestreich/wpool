@@ -1102,7 +1102,7 @@ fn waiting_queue_len_race() {
             let mut max = 0;
             for _ in 0..num_jobs {
                 thread_pool.submit(move || {
-                    thread::sleep(Duration::from_micros(20));
+                    thread::sleep(Duration::from_micros(1));
                 });
                 let waiting = thread_pool.waiting_queue_len();
                 if waiting > max {

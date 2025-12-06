@@ -7,11 +7,11 @@ use std::{
 use crate::{AsWPoolStatus, PanicReport, WPoolStatus, safe_lock};
 
 pub(crate) struct SharedDataInner {
-    pub(crate) worker_count: usize,
-    pub(crate) worker_handles: HashMap<ThreadId, Option<JoinHandle<()>>>,
-    pub(crate) pool_status: u8,
-    pub(crate) waiting_queue_length: usize,
-    pub(crate) panic_reports: Vec<PanicReport>,
+    worker_count: usize,
+    worker_handles: HashMap<ThreadId, Option<JoinHandle<()>>>,
+    pool_status: u8,
+    waiting_queue_length: usize,
+    panic_reports: Vec<PanicReport>,
 }
 
 impl Default for SharedDataInner {

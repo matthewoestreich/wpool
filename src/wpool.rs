@@ -510,7 +510,7 @@ impl WPool {
             //self.task_sender.close();
             if let Some(task_sender) = safe_lock(&self.task_sender).take() {
                 drop(task_sender);
-            } 
+            }
         });
 
         if let Some(handle) = safe_lock(&self.dispatcher_handle).take() {
