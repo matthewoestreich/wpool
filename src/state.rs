@@ -6,7 +6,7 @@ use std::{
 
 use crate::{AsWPoolStatus, PanicReport, WPoolStatus, safe_lock};
 
-pub(crate) struct SharedDataInner {
+struct StateInner {
     worker_count: usize,
     worker_handles: HashMap<ThreadId, Option<JoinHandle<()>>>,
     pool_status: u8,
@@ -14,7 +14,7 @@ pub(crate) struct SharedDataInner {
     panic_reports: Vec<PanicReport>,
 }
 
-impl Default for SharedDataInner {
+impl Default for StateInner {
     fn default() -> Self {
         Self {
             worker_count: 0,
@@ -26,11 +26,11 @@ impl Default for SharedDataInner {
     }
 }
 
-pub(crate) struct SharedData {
-    inner: Arc<Mutex<SharedDataInner>>,
+pub(crate) struct State {
+    inner: Arc<Mutex<StateInner>>,
 }
 
-impl Clone for SharedData {
+impl Clone for State {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
@@ -38,10 +38,10 @@ impl Clone for SharedData {
     }
 }
 
-impl SharedData {
+impl State {
     pub(crate) fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(SharedDataInner::default())),
+            inner: Arc::new(Mutex::new(StateInner::default())),
         }
     }
 

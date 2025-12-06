@@ -5,7 +5,7 @@ use wpool::WPool;
 
 fn bench_submit_small_tasks(c: &mut Criterion) {
     let max_workers = 8;
-    let num_jobs = 50_000;
+    let num_jobs = 5_000;
 
     // Create thread pools once
     //let wpool = Arc::new(WPool::new(max_workers));

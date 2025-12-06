@@ -1,7 +1,7 @@
 use crossbeam_channel::{Receiver, RecvTimeoutError, TryRecvError, TrySendError};
 use std::{collections::VecDeque, thread};
 
-use crate::{Channel, Signal, WPoolStatus, state::SharedData, worker, wpool::WORKER_IDLE_TIMEOUT};
+use crate::{Channel, Signal, WPoolStatus, state::State, worker, wpool::WORKER_IDLE_TIMEOUT};
 
 /******************** Dispatcher *************************************/
 
@@ -62,7 +62,7 @@ pub(crate) struct DefaultDispatchStrategy {
     max_workers: usize,
     waiting_queue: VecDeque<Signal>,
     is_idle: bool,
-    state: SharedData,
+    state: State,
     task_receiver: Receiver<Signal>,
     worker_channel: Channel<Signal>,
 }
@@ -72,7 +72,7 @@ impl DefaultDispatchStrategy {
         min_workers: usize,
         max_workers: usize,
         task_receiver: Receiver<Signal>,
-        state: SharedData,
+        state: State,
     ) -> Self {
         Self {
             min_workers,

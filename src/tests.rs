@@ -247,10 +247,9 @@ fn test_zero_max_workers() {
 }
 
 #[test]
-#[ignore]
 fn test_panic_panic_example_in_readme() {
     let wp = WPool::new(3);
-    wp.submit_confirm(|| panic!("something went wrong!"));
+    wp.submit(|| panic!("something went wrong!"));
     println!("{:#?}", wp.get_workers_panic_info());
     // [
     //     PanicInfo {
@@ -1241,6 +1240,63 @@ fn test_long_running_job_continues_after_stop_wait() {
         counter.load(Ordering::SeqCst)
     );
     assert_eq!(counter.load(Ordering::SeqCst), max_workers);
+}
+
+#[test]
+fn test_max_workers_isnt_exceeded() {
+    let max_workers = 5;
+    let num_jobs = 10;
+    let wp = WPool::new(max_workers);
+
+    for _ in 0..num_jobs {
+        wp.submit(|| {
+            thread::sleep(Duration::from_secs(5));
+        });
+        thread::sleep(Duration::from_millis(200));
+        let wc = wp.worker_count();
+        println!("worker_count = {wc}");
+        assert!(wc <= max_workers);
+    }
+
+    assert!(wp.worker_count() <= max_workers);
+    wp.stop_wait();
+}
+
+#[test]
+fn test_concurrent_submissions() {
+    let wp = Arc::new(WPool::new(5));
+    let wp_1 = Arc::clone(&wp);
+    let wp_2 = Arc::clone(&wp);
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_1 = Arc::clone(&counter);
+    let counter_2 = Arc::clone(&counter);
+
+    let num_jobs_per_thread = 250;
+
+    let h1 = thread::spawn(move || {
+        for _ in 0..num_jobs_per_thread {
+            let c = Arc::clone(&counter_1);
+            wp_1.submit(move || {
+                c.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+    });
+    let h2 = thread::spawn(move || {
+        for _ in 0..num_jobs_per_thread {
+            let c = Arc::clone(&counter_2);
+            wp_2.submit(move || {
+                c.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+    });
+
+    thread::sleep(Duration::from_secs(3));
+    let _ = h1.join();
+    let _ = h2.join();
+
+    assert_eq!(num_jobs_per_thread * 2, counter.load(Ordering::SeqCst));
+    wp.stop_wait();
 }
 
 #[test]

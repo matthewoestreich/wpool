@@ -2,12 +2,12 @@ use std::{panic::catch_unwind, thread};
 
 use crossbeam_channel::Receiver;
 
-use crate::{PanicReport, Signal, state::SharedData};
+use crate::{PanicReport, Signal, state::State};
 
 /// Spawns a new thread that runs signal tasks. A worker thread will run
 /// the signal task that was given to it during creation, then listen for
 /// new tasks on the worker channel.
-pub(crate) fn spawn(signal: Signal, worker_receiver: Receiver<Signal>, state: SharedData) {
+pub(crate) fn spawn(signal: Signal, worker_receiver: Receiver<Signal>, state: State) {
     let worker_receiver_clone = worker_receiver.clone();
     let thread_state = state.clone();
 

@@ -12,7 +12,7 @@ use crate::{
     Channel, PanicReport, Signal, Task, WPoolStatus, WaitGroup,
     dispatcher::{DefaultDispatchStrategy, Dispatcher},
     safe_lock,
-    state::SharedData,
+    state::State,
 };
 
 pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -26,7 +26,7 @@ pub struct WPool {
     min_workers: usize,
     shutdown_lock: Mutex<Channel<()>>,
     stop_once: Once,
-    state: SharedData,
+    state: State,
     task_sender: Mutex<Option<crossbeam_channel::Sender<Signal>>>,
 }
 
@@ -41,7 +41,7 @@ impl WPool {
         assert!(max_workers >= min_workers, "min_workers > max_workers");
 
         let task_channel = Channel::new_unbounded();
-        let state = SharedData::new();
+        let state = State::new();
 
         let dispatcher = Dispatcher::new(DefaultDispatchStrategy::new(
             min_workers,
