@@ -120,7 +120,7 @@ impl DispatchStrategy for DefaultDispatchStrategy {
     fn on_signal(&mut self, signal: Signal) {
         // Take ownership of confirmation from signal.
         // This is for when `pool.submit_confirm(...)` is called.
-        //let signal_confirmation = signal.take_confirm();
+        let signal_confirmation = signal.take_confirm();
 
         // Process received signal by placing in wait queue or handing to worker.
         if self.state.worker_count() >= self.max_workers {
@@ -137,9 +137,9 @@ impl DispatchStrategy for DefaultDispatchStrategy {
 
         // [[ IMPORTANT ]] : we only want to send confirmation AFTER we know the worker
         // count has been updated. This is for when `.submit_confirm(...)` is called.
-        //if let Some(confirmation) = signal_confirmation {
-        //    confirmation.drop();
-        //}
+        if let Some(confirmation) = signal_confirmation {
+            drop(confirmation);
+        }
 
         self.is_idle = false;
     }

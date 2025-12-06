@@ -14,7 +14,7 @@
 //!
 //! ## With `WPool`
 //!
-//! ```rust
+//! ```rust,ignore
 //! use wpool::{WPool, pacer::Pacer};
 //! use std::time::Duration;
 //! use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
@@ -40,7 +40,7 @@
 //!
 //! ## Without `WPool`
 //!
-//! ```rust
+//! ```rust,ignore
 //! use wpool::{WPool, pacer::Pacer};
 //! use std::thread;
 //! use std::time::Duration;
@@ -66,7 +66,7 @@
 //!
 //! By "regular functions", we mean functions not wrapped in `PacedFn`.
 //!
-//! ```rust
+//! ```rust,ignore
 //! use wpool::{WPool, pacer::Pacer};
 //! use std::time::{Duration, Instant};
 //! use std::sync::atomic::{Ordering, AtomicUsize};

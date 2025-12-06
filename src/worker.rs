@@ -17,7 +17,7 @@ pub(crate) fn spawn(signal: Signal, worker_receiver: Receiver<Signal>, state: St
         while signal_opt.is_some() {
             match signal_opt.take().expect("is_some()") {
                 Signal::Terminate => break,
-                Signal::NewTask(task) => {
+                Signal::NewTask(task) | Signal::NewTaskWithConfirmation(task, _) => {
                     let task_result = catch_unwind(|| task.run());
                     if let Ok(pr) = PanicReport::try_from(task_result) {
                         thread_state.insert_panic_report(pr);

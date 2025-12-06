@@ -1,7 +1,7 @@
 use std::{
     panic::UnwindSafe,
     sync::{
-        Mutex, Once,
+        Arc, Mutex, Once,
         mpsc::{self},
     },
     thread::{self},
@@ -222,7 +222,7 @@ impl WPool {
     ///
     pub fn submit_wait<F>(&self, task: F)
     where
-        F: Fn() + Send + Sync + UnwindSafe + 'static,
+        F: FnOnce() + Send + Sync + UnwindSafe + 'static,
     {
         let (tx, rx) = mpsc::sync_channel(0);
         self.submit(move || {
@@ -260,13 +260,13 @@ impl WPool {
     ///
     pub fn submit_confirm<F>(&self, task: F)
     where
-        F: Fn() + Send + Sync + UnwindSafe + 'static,
+        F: FnOnce() + Send + Sync + UnwindSafe + 'static,
     {
         let chan = Channel::<()>::new_bounded(0);
-        //let sender = Some(chan.sender.clone());
-        self.submit_signal(Signal::NewTask(
+        let sender = chan.sender;
+        self.submit_signal(Signal::NewTaskWithConfirmation(
             Task::new(task),
-            //Arc::new(Mutex::new(sender)),
+            Arc::new(Mutex::new(sender.into())),
         ));
         let _ = chan.receiver.recv();
     }
@@ -488,7 +488,9 @@ impl WPool {
         if matches!(self.status(), WPoolStatus::Stopped(_)) {
             return;
         }
-        let _ = safe_lock(&self.task_sender).as_ref().unwrap().send(signal);
+        if let Some(sender) = safe_lock(&self.task_sender).as_ref() {
+            let _ = sender.send(signal);
+        }
     }
 
     fn status(&self) -> WPoolStatus {

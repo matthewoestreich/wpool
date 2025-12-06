@@ -257,7 +257,6 @@ use std::{
 };
 
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
-//use crate::channel::Sender;
 
 /************************************* [PUBLIC] PanicReport ******************************/
 
@@ -391,15 +390,30 @@ impl AsWPoolStatus for u8 {
 
 /*********************************** Signal **********************************************/
 
+pub(crate) type Confirmation = Arc<Mutex<Option<Sender<()>>>>;
+
 pub(crate) enum Signal {
     NewTask(Task),
+    NewTaskWithConfirmation(Task, Confirmation),
     Terminate,
+}
+
+impl Signal {
+    pub(crate) fn take_confirm(&self) -> Option<Sender<()>> {
+        if let Signal::NewTaskWithConfirmation(_, confirm) = self {
+            return safe_lock(confirm).take();
+        }
+        None
+    }
 }
 
 impl Display for Signal {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Signal::NewTask(_) => write!(f, "Signal::NewTask(Task)"),
+            Signal::NewTaskWithConfirmation(_, _) => {
+                write!(f, "Signal::NewTaskWithConfirmation(Task, Confirmation)")
+            }
             Signal::Terminate => write!(f, "Signal::Terminate"),
         }
     }

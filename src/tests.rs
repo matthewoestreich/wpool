@@ -212,7 +212,6 @@ fn test_worker_count_example_in_docs() {
 }
 
 #[test]
-#[ignore]
 fn test_submit_confirm() {
     let max_workers = 5;
     let wp = WPool::new(max_workers);
@@ -1259,6 +1258,27 @@ fn test_max_workers_isnt_exceeded() {
     }
 
     assert!(wp.worker_count() <= max_workers);
+    wp.stop_wait();
+}
+
+#[test]
+fn test_doc_comment_from_lib() {
+    use crate::wpool::WPool;
+    use std::thread;
+    use std::time::Duration;
+    let max_workers = 5;
+    let wp = WPool::new(max_workers);
+    for i in 1..=max_workers {
+        // Will block here until job is *submitted*.
+        println!("about to submit {i}");
+        wp.submit_confirm(|| {
+            thread::sleep(Duration::from_secs(2));
+        });
+        println!("  -> submitted {i}");
+        // Now you know that a worker has been spawned, or job placed in queue (which means we are already at max workers).
+        assert_eq!(wp.worker_count(), i);
+    }
+    assert_eq!(wp.worker_count(), max_workers);
     wp.stop_wait();
 }
 
