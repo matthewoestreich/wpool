@@ -1078,6 +1078,31 @@ fn test_wait_queue_len_race_2() {
 }
 
 #[test]
+fn test_submit_not_allowed_after_shutdown() {
+    let wp = WPool::new(5);
+    let counter = Arc::new(AtomicUsize::new(0));
+
+    for _ in 0..10 {
+        let c = Arc::clone(&counter);
+        wp.submit(move || {
+            thread::sleep(Duration::from_millis(100));
+            c.fetch_add(1, Ordering::SeqCst);
+        });
+    }
+
+    wp.stop_wait();
+    assert_eq!(10, counter.load(Ordering::SeqCst));
+
+    let c = Arc::clone(&counter);
+    wp.submit(move || {
+        thread::sleep(Duration::from_millis(10));
+        c.fetch_add(1, Ordering::SeqCst);
+    });
+    wp.stop_wait();
+    assert_eq!(10, counter.load(Ordering::SeqCst)); // Make sure job submitted after first `stop_wait` did not run
+}
+
+#[test]
 fn test_wq_race() {
     run_test_n_times(200, 0, true, waiting_queue_len_race);
 }
@@ -1102,6 +1127,7 @@ fn waiting_queue_len_race() {
                 thread_pool.submit(move || {
                     thread::sleep(Duration::from_micros(1));
                 });
+                thread::sleep(Duration::from_micros(3));
                 let waiting = thread_pool.waiting_queue_len();
                 if waiting > max {
                     max = waiting;

@@ -8,6 +8,8 @@ use std::{
     time::Duration,
 };
 
+use crossbeam_channel::Sender;
+
 use crate::{
     Channel, PanicReport, Signal, Task, WPoolStatus, WaitGroup,
     dispatcher::{DefaultDispatchStrategy, Dispatcher},
@@ -27,7 +29,7 @@ pub struct WPool {
     shutdown_lock: Mutex<Channel<()>>,
     stop_once: Once,
     state: State,
-    task_sender: Mutex<Option<crossbeam_channel::Sender<Signal>>>,
+    task_sender: Option<Sender<Signal>>,
 }
 
 impl Drop for WPool {
@@ -57,7 +59,7 @@ impl WPool {
             shutdown_lock: Channel::new_unbounded().into(),
             stop_once: Once::new(),
             state,
-            task_sender: Mutex::new(task_channel.sender.clone().into()),
+            task_sender: Some(task_channel.sender),
         }
     }
 
@@ -488,7 +490,7 @@ impl WPool {
         if matches!(self.status(), WPoolStatus::Stopped(_)) {
             return;
         }
-        if let Some(sender) = safe_lock(&self.task_sender).as_ref() {
+        if let Some(sender) = self.task_sender.as_ref() {
             let _ = sender.send(signal);
         }
     }
@@ -508,10 +510,12 @@ impl WPool {
             let shutdown_lock = safe_lock(&self.shutdown_lock);
             self.set_status(WPoolStatus::Stopped(wait));
             drop(shutdown_lock);
-            // Close tasks channel.
-            //self.task_sender.close();
-            if let Some(task_sender) = safe_lock(&self.task_sender).take() {
-                drop(task_sender);
+
+            // SAFETY : task_sender will not be used beyond this point. Close tasks channel.
+            unsafe {
+                // Get a mutable pointer to task_sender
+                let ptr: *mut Option<Sender<Signal>> = &self.task_sender as *const _ as *mut _;
+                drop((*ptr).take()); // Take the value out and drop the sender, closes channel.
             }
         });
 

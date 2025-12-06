@@ -1,6 +1,12 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use rayon::ThreadPoolBuilder;
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 use wpool::WPool;
 
 fn bench_submit_small_tasks(c: &mut Criterion) {
@@ -9,12 +15,12 @@ fn bench_submit_small_tasks(c: &mut Criterion) {
 
     // Create thread pools once
     //let wpool = Arc::new(WPool::new(max_workers));
-    let rayon_pool = Arc::new(
-        ThreadPoolBuilder::new()
-            .num_threads(max_workers)
-            .build()
-            .unwrap(),
-    );
+    //let rayon_pool = Arc::new(
+    //    ThreadPoolBuilder::new()
+    //        .num_threads(max_workers)
+    //        .build()
+    //        .unwrap(),
+    //);
 
     let mut group = c.benchmark_group("pool_submit");
     group.measurement_time(Duration::from_millis(15000));
@@ -27,19 +33,23 @@ fn bench_submit_small_tasks(c: &mut Criterion) {
             num_jobs, max_workers
         ),
         |b| {
-            let pool = WPool::new(max_workers);
             b.iter(|| {
+                let pool = WPool::new(max_workers);
+                let counter = Arc::new(AtomicUsize::new(0));
+
                 for _ in 0..num_jobs {
-                    pool.submit(|| {
+                    let c = counter.clone();
+                    pool.submit(move || {
                         let mut x = std::hint::black_box(0u64);
                         for _ in 0..100 {
                             x = x.wrapping_add(1);
                         }
-                        x = x.wrapping_add(1);
-                        std::hint::black_box(x);
+                        c.fetch_add(1, Ordering::Relaxed);
                     });
                 }
+
                 pool.stop_wait();
+                assert_eq!(counter.load(Ordering::Relaxed), num_jobs);
             });
         },
     );
@@ -51,31 +61,28 @@ fn bench_submit_small_tasks(c: &mut Criterion) {
             num_jobs, max_workers
         ),
         |b| {
-            let pool = rayon_pool.clone();
+            let pool = ThreadPoolBuilder::new()
+                .num_threads(max_workers)
+                .build()
+                .unwrap();
+
             b.iter(|| {
-                /*
+                let counter = Arc::new(AtomicUsize::new(0));
+
                 pool.scope(|s| {
                     for _ in 0..num_jobs {
-                        s.spawn(|_| {
+                        let c = counter.clone();
+                        s.spawn(move |_| {
                             let mut x = std::hint::black_box(0u64);
                             for _ in 0..100 {
                                 x = x.wrapping_add(1);
                             }
-                            std::hint::black_box(x);
+                            c.fetch_add(1, Ordering::Relaxed);
                         });
                     }
                 });
-                */
-                for _ in 0..num_jobs {
-                    pool.spawn(|| {
-                        let mut x = std::hint::black_box(0u64);
-                        for _ in 0..100 {
-                            x = x.wrapping_add(1);
-                        }
-                        x = x.wrapping_add(1);
-                        std::hint::black_box(x);
-                    });
-                }
+
+                assert_eq!(counter.load(Ordering::Relaxed), num_jobs);
             });
         },
     );
