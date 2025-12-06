@@ -380,11 +380,11 @@ impl fmt::Debug for WPoolStatus {
 }
 
 pub(crate) trait AsWPoolStatus {
-    fn as_enum(&self) -> WPoolStatus;
+    fn as_wpool_status(&self) -> WPoolStatus;
 }
 
 impl AsWPoolStatus for u8 {
-    fn as_enum(&self) -> WPoolStatus {
+    fn as_wpool_status(&self) -> WPoolStatus {
         WPoolStatus::from_u8(*self)
     }
 }

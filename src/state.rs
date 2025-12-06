@@ -58,7 +58,7 @@ impl SharedData {
     }
 
     pub(crate) fn pool_status(&self) -> WPoolStatus {
-        safe_lock(&self.inner).pool_status.as_enum()
+        safe_lock(&self.inner).pool_status.as_wpool_status()
     }
 
     pub(crate) fn set_pool_status(&self, status: WPoolStatus) {
