@@ -511,8 +511,11 @@ impl WPool {
             self.set_status(WPoolStatus::Stopped(wait));
             drop(shutdown_lock);
 
-            // SAFETY : task_sender will not be used beyond this point. Close tasks channel.
+            // SAFETY : task_sender will not be used beyond this point. There [should] be ZERO
+            // clones of task_sender, we are the only thread that should own a
+            // task_channel.sender.
             unsafe {
+                // Close the task channel.
                 // Get a mutable pointer to task_sender
                 let ptr: *mut Option<Sender<Signal>> = &self.task_sender as *const _ as *mut _;
                 drop((*ptr).take()); // Take the value out and drop the sender, closes channel.

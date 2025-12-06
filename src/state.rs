@@ -1,38 +1,41 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     thread::{self, JoinHandle, ThreadId},
 };
 
 use crate::{AsWPoolStatus, PanicReport, WPoolStatus, safe_lock};
 
 struct StateInner {
-    worker_count: usize,
     worker_handles: HashMap<ThreadId, Option<JoinHandle<()>>>,
     pool_status: u8,
-    waiting_queue_length: usize,
     panic_reports: Vec<PanicReport>,
 }
 
 impl Default for StateInner {
     fn default() -> Self {
         Self {
-            worker_count: 0,
             worker_handles: HashMap::new(),
             pool_status: WPoolStatus::Running.as_u8(),
-            waiting_queue_length: 0,
             panic_reports: Vec::new(),
         }
     }
 }
 
 pub(crate) struct State {
+    worker_count: Arc<AtomicUsize>,
+    waiting_queue_len: Arc<AtomicUsize>,
     inner: Arc<Mutex<StateInner>>,
 }
 
 impl Clone for State {
     fn clone(&self) -> Self {
         Self {
+            worker_count: Arc::clone(&self.worker_count),
+            waiting_queue_len: Arc::clone(&self.waiting_queue_len),
             inner: Arc::clone(&self.inner),
         }
     }
@@ -41,20 +44,22 @@ impl Clone for State {
 impl State {
     pub(crate) fn new() -> Self {
         Self {
+            worker_count: Arc::new(AtomicUsize::new(0)),
+            waiting_queue_len: Arc::new(AtomicUsize::new(0)),
             inner: Arc::new(Mutex::new(StateInner::default())),
         }
     }
 
     pub(crate) fn worker_count(&self) -> usize {
-        safe_lock(&self.inner).worker_count
+        self.worker_count.load(Ordering::SeqCst)
     }
 
     pub(crate) fn inc_worker_count(&self) {
-        safe_lock(&self.inner).worker_count += 1;
+        self.worker_count.fetch_add(1, Ordering::SeqCst);
     }
 
     pub(crate) fn dec_worker_count(&self) {
-        safe_lock(&self.inner).worker_count -= 1;
+        self.worker_count.fetch_sub(1, Ordering::SeqCst);
     }
 
     pub(crate) fn pool_status(&self) -> WPoolStatus {
@@ -66,11 +71,11 @@ impl State {
     }
 
     pub(crate) fn waiting_queue_len(&self) -> usize {
-        safe_lock(&self.inner).waiting_queue_length
+        self.waiting_queue_len.load(Ordering::SeqCst)
     }
 
     pub(crate) fn set_waiting_queue_len(&self, len: usize) {
-        safe_lock(&self.inner).waiting_queue_length = len;
+        self.waiting_queue_len.store(len, Ordering::SeqCst);
     }
 
     pub(crate) fn panic_reports(&self) -> Vec<PanicReport> {

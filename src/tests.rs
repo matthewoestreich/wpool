@@ -2,7 +2,7 @@
 use std::{
     panic::{self, RefUnwindSafe, UnwindSafe},
     sync::{
-        Arc, Mutex,
+        Arc, Barrier, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
@@ -12,7 +12,7 @@ use std::{
 use crossbeam_channel::{RecvTimeoutError, TryRecvError};
 
 use crate::{
-    WaitGroup, safe_lock,
+    Channel, WaitGroup, safe_lock,
     wpool::{WORKER_IDLE_TIMEOUT, WPool},
 };
 
@@ -1113,27 +1113,41 @@ fn waiting_queue_len_race() {
     let num_threads = 100;
     let num_jobs = 20;
     let max_workers = 1;
-    let mut handles = Vec::<std::thread::JoinHandle<()>>::new();
 
     let wp = Arc::new(WPool::new(max_workers));
-    let max_chan = crate::Channel::new_unbounded();
+    let max_chan = Channel::new_unbounded();
+
+    // Barrier for all threads to start submitting tasks at the same time
+    let start_barrier = Arc::new(Barrier::new(num_threads));
+
+    let mut handles = Vec::with_capacity(num_threads);
 
     for _ in 0..num_threads {
         let thread_pool = Arc::clone(&wp);
-        let max_chan_tx_clone = max_chan.sender.clone();
+        let max_chan_tx = max_chan.sender.clone();
+        let barrier = Arc::clone(&start_barrier);
+
         handles.push(thread::spawn(move || {
-            let mut max = 0;
+            let mut max_seen = 0;
+
+            // Wait until all threads are ready
+            barrier.wait();
+
             for _ in 0..num_jobs {
                 thread_pool.submit(move || {
                     thread::sleep(Duration::from_micros(1));
                 });
+
+                // Short delay to allow the dispatcher to pick up tasks
                 thread::sleep(Duration::from_micros(3));
+
                 let waiting = thread_pool.waiting_queue_len();
-                if waiting > max {
-                    max = waiting;
+                if waiting > max_seen {
+                    max_seen = waiting;
                 }
             }
-            let _ = max_chan_tx_clone.send(max);
+
+            let _ = max_chan_tx.send(max_seen);
         }));
     }
 
@@ -1150,6 +1164,7 @@ fn waiting_queue_len_race() {
     }
 
     println!("max_seen = {final_max}");
+
     assert!(
         final_max > 0,
         "expected to see waiting queue size > 0 : got {final_max}"
@@ -1158,6 +1173,7 @@ fn waiting_queue_len_race() {
         final_max < num_threads * num_jobs,
         "should not have seen all tasks on waiting queue"
     );
+
     wp.stop_wait();
 }
 
