@@ -86,7 +86,6 @@ impl State {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn insert_worker_handle(&self, key: ThreadId, value: JoinHandle<()>) {
         safe_lock(&self.worker_handles).insert(key, Some(value));
     }
