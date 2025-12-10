@@ -32,6 +32,10 @@ name = "wpool_vs_threadpool"
 harness = false
 
 [[bin]]
+name = "flamegraph"
+path = "bin/flamegraph.rs"
+
+[[bin]]
 name = "wpool_bin"
 path = "bin/main.rs"
 

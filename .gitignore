@@ -19,3 +19,4 @@ rustc-ice-*.*
 /.vscode/
 cat_to_clipboard.sh
 .DS_Store
+flamegraph.svg

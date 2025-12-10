@@ -4,26 +4,17 @@ use std::{
         Arc, Mutex, Once,
         mpsc::{self},
     },
-    thread::{self},
-    time::Duration,
 };
 
 use crossbeam_channel::Sender;
 
-use crate::{
-    Channel, PanicReport, Signal, Task, WPoolStatus, WaitGroup,
-    dispatcher::{DefaultDispatchStrategy, Dispatcher},
-    safe_lock,
-    state::State,
-};
-
-pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
+use crate::{Channel, PanicReport, Signal, Task, WPoolStatus, WaitGroup, safe_lock, state::State};
 
 /// `WPool` is a thread pool that limits the number of tasks executing concurrently,
 /// without restricting how many tasks can be queued. Submitting tasks is non-blocking,
 /// so you can enqueue any number of tasks without waiting.
 pub struct WPool {
-    dispatcher_handle: Mutex<Option<thread::JoinHandle<()>>>,
+    //dispatcher_handle: Mutex<Option<thread::JoinHandle<()>>>,
     max_workers: usize,
     min_workers: usize,
     shutdown_lock: Mutex<Channel<()>>,
@@ -43,17 +34,25 @@ impl WPool {
         assert!(max_workers >= min_workers, "min_workers > max_workers");
 
         let task_channel = Channel::new_unbounded();
-        let state = State::new();
+        let state = State::new(max_workers);
 
-        let dispatcher = Dispatcher::new(DefaultDispatchStrategy::new(
-            min_workers,
-            max_workers,
-            task_channel.receiver.clone(),
-            state.clone(),
-        ));
+        for _ in 0..max_workers {
+            crate::worker::spawn(
+                Signal::NewTask(Task::noop()),
+                task_channel.receiver.clone(),
+                state.clone(),
+            );
+        }
+
+        //let dispatcher = Dispatcher::new(DefaultDispatchStrategy::new(
+        //    min_workers,
+        //    max_workers,
+        //    task_channel.receiver.clone(),
+        //    state.clone(),
+        //));
 
         Self {
-            dispatcher_handle: Some(dispatcher.spawn()).into(),
+            //dispatcher_handle: Some(dispatcher.spawn()).into(),
             max_workers,
             min_workers,
             shutdown_lock: Channel::new_unbounded().into(),
@@ -490,6 +489,7 @@ impl WPool {
         if matches!(self.status(), WPoolStatus::Stopped(_)) {
             return;
         }
+        self.state.inc_waiting_queue_len();
         if let Some(sender) = self.task_sender.as_ref() {
             let _ = sender.send(signal);
         }
@@ -520,10 +520,11 @@ impl WPool {
                 let ptr: *mut Option<Sender<Signal>> = &self.task_sender as *const _ as *mut _;
                 drop((*ptr).take()); // Take the value out and drop the sender, closes channel.
             }
+            self.state.join_worker_handles();
         });
 
-        if let Some(handle) = safe_lock(&self.dispatcher_handle).take() {
-            let _ = handle.join();
-        }
+        //if let Some(handle) = safe_lock(&self.dispatcher_handle).take() {
+        //    let _ = handle.join();
+        //}
     }
 }

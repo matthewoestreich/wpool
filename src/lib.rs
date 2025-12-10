@@ -236,7 +236,6 @@
 #[cfg(test)]
 mod tests;
 
-mod dispatcher;
 mod state;
 mod worker;
 mod wpool;
@@ -251,7 +250,7 @@ use std::{
     panic::UnwindSafe,
     sync::{
         Arc, Condvar, Mutex, MutexGuard,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU8, AtomicUsize, Ordering},
     },
     thread::{self, ThreadId},
 };
@@ -388,6 +387,12 @@ impl AsWPoolStatus for u8 {
     }
 }
 
+impl AsWPoolStatus for AtomicU8 {
+    fn as_wpool_status(&self) -> WPoolStatus {
+        WPoolStatus::from_u8(self.load(Ordering::SeqCst))
+    }
+}
+
 /*********************************** Signal **********************************************/
 
 pub(crate) type Confirmation = Arc<Mutex<Option<Sender<()>>>>;
@@ -395,6 +400,7 @@ pub(crate) type Confirmation = Arc<Mutex<Option<Sender<()>>>>;
 pub(crate) enum Signal {
     NewTask(Task),
     NewTaskWithConfirmation(Task, Confirmation),
+    #[allow(dead_code)]
     Terminate,
 }
 
