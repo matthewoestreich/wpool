@@ -37,6 +37,7 @@ impl WPool {
         let state = State::new(max_workers);
 
         for _ in 0..max_workers {
+            state.inc_waiting_queue_len();
             crate::worker::spawn(
                 Signal::NewTask(Task::noop()),
                 task_channel.receiver.clone(),
@@ -44,15 +45,7 @@ impl WPool {
             );
         }
 
-        //let dispatcher = Dispatcher::new(DefaultDispatchStrategy::new(
-        //    min_workers,
-        //    max_workers,
-        //    task_channel.receiver.clone(),
-        //    state.clone(),
-        //));
-
         Self {
-            //dispatcher_handle: Some(dispatcher.spawn()).into(),
             max_workers,
             min_workers,
             shutdown_lock: Channel::new_unbounded().into(),
@@ -188,6 +181,7 @@ impl WPool {
     where
         F: FnOnce() + Send + Sync + UnwindSafe + 'static,
     {
+        self.state.inc_waiting_queue_len();
         let t = Task::new(task);
         //let c = Mutex::new(None).into();
         self.submit_signal(Signal::NewTask(t));
@@ -225,6 +219,7 @@ impl WPool {
     where
         F: FnOnce() + Send + Sync + UnwindSafe + 'static,
     {
+        self.state.inc_waiting_queue_len();
         let (tx, rx) = mpsc::sync_channel(0);
         self.submit(move || {
             task();
@@ -263,6 +258,7 @@ impl WPool {
     where
         F: FnOnce() + Send + Sync + UnwindSafe + 'static,
     {
+        self.state.inc_waiting_queue_len();
         let chan = Channel::<()>::new_bounded(0);
         let sender = chan.sender;
         self.submit_signal(Signal::NewTaskWithConfirmation(
@@ -489,7 +485,6 @@ impl WPool {
         if matches!(self.status(), WPoolStatus::Stopped(_)) {
             return;
         }
-        self.state.inc_waiting_queue_len();
         if let Some(sender) = self.task_sender.as_ref() {
             let _ = sender.send(signal);
         }

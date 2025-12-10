@@ -9,13 +9,24 @@ use std::{
 
 use crate::{AsWPoolStatus, PanicReport, WPoolStatus, safe_lock};
 
-#[derive(Clone)]
 pub(crate) struct State {
     worker_count: Arc<AtomicUsize>,
     waiting_queue_len: Arc<AtomicUsize>,
     pool_status: Arc<AtomicU8>,
     worker_handles: Arc<Mutex<HashMap<ThreadId, Option<JoinHandle<()>>>>>,
     panic_reports: Arc<Mutex<Vec<PanicReport>>>,
+}
+
+impl Clone for State {
+    fn clone(&self) -> Self {
+        Self {
+            worker_count: Arc::clone(&self.worker_count),
+            waiting_queue_len: Arc::clone(&self.waiting_queue_len),
+            pool_status: Arc::clone(&self.pool_status),
+            worker_handles: Arc::clone(&self.worker_handles),
+            panic_reports: Arc::clone(&self.panic_reports),
+        }
+    }
 }
 
 impl State {
@@ -86,10 +97,12 @@ impl State {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn insert_worker_handle(&self, key: ThreadId, value: JoinHandle<()>) {
         safe_lock(&self.worker_handles).insert(key, Some(value));
     }
 
+    #[allow(dead_code)]
     pub(crate) fn join_worker_handles(&self) {
         let mut lock = safe_lock(&self.worker_handles);
 
