@@ -90,7 +90,6 @@ impl State {
         safe_lock(&self.worker_handles).insert(key, Some(value));
     }
 
-    #[allow(dead_code)]
     pub(crate) fn join_worker_handles(&self) {
         let mut lock = safe_lock(&self.worker_handles);
 
