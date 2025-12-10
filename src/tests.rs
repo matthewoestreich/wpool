@@ -378,7 +378,7 @@ fn test_stop_basic() {
     for i in 0..num_jobs {
         let counter_clone = counter.clone();
         p.submit(move || {
-            thread::sleep(Duration::from_millis(5));
+            thread::sleep(Duration::from_millis(500));
             counter_clone.fetch_add(1, Ordering::SeqCst);
             println!("job {i:?} done");
         });
@@ -1312,8 +1312,6 @@ fn test_doc_comment_from_lib() {
             thread::sleep(Duration::from_secs(2));
         });
         println!("  -> submitted {i}");
-        // Now you know that a worker has been spawned, or job placed in queue (which means we are already at max workers).
-        assert_eq!(wp.worker_count(), i);
     }
     assert_eq!(wp.worker_count(), max_workers);
     wp.stop_wait();

@@ -8,7 +8,9 @@ use std::{
 
 use crossbeam_channel::Sender;
 
-use crate::{Channel, PanicReport, Signal, Task, WPoolStatus, WaitGroup, safe_lock, state::State};
+use crate::{
+    Channel, PanicReport, Signal, Task, WPoolStatus, WaitGroup, safe_lock, state::State, worker,
+};
 
 /// `WPool` is a thread pool that limits the number of tasks executing concurrently,
 /// without restricting how many tasks can be queued. Submitting tasks is non-blocking,
@@ -20,7 +22,7 @@ pub struct WPool {
     shutdown_lock: Mutex<Channel<()>>,
     stop_once: Once,
     state: State,
-    task_sender: Option<Sender<Signal>>,
+    task_sender: Mutex<Option<Sender<Signal>>>,
 }
 
 impl Drop for WPool {
@@ -38,7 +40,7 @@ impl WPool {
 
         for _ in 0..max_workers {
             state.inc_waiting_queue_len();
-            crate::worker::spawn(
+            worker::spawn(
                 Signal::NewTask(Task::noop()),
                 task_channel.receiver.clone(),
                 state.clone(),
@@ -51,7 +53,7 @@ impl WPool {
             shutdown_lock: Channel::new_unbounded().into(),
             stop_once: Once::new(),
             state,
-            task_sender: Some(task_channel.sender),
+            task_sender: Some(task_channel.sender).into(),
         }
     }
 
@@ -181,7 +183,6 @@ impl WPool {
     where
         F: FnOnce() + Send + Sync + UnwindSafe + 'static,
     {
-        self.state.inc_waiting_queue_len();
         let t = Task::new(task);
         //let c = Mutex::new(None).into();
         self.submit_signal(Signal::NewTask(t));
@@ -219,7 +220,6 @@ impl WPool {
     where
         F: FnOnce() + Send + Sync + UnwindSafe + 'static,
     {
-        self.state.inc_waiting_queue_len();
         let (tx, rx) = mpsc::sync_channel(0);
         self.submit(move || {
             task();
@@ -258,14 +258,15 @@ impl WPool {
     where
         F: FnOnce() + Send + Sync + UnwindSafe + 'static,
     {
-        self.state.inc_waiting_queue_len();
         let chan = Channel::<()>::new_bounded(0);
         let sender = chan.sender;
         self.submit_signal(Signal::NewTaskWithConfirmation(
             Task::new(task),
             Arc::new(Mutex::new(sender.into())),
         ));
+        println!("submit_confirm -> about to recv");
         let _ = chan.receiver.recv();
+        println!("    submit_confirm -> exiting!");
     }
 
     /// Stops the pool and waits for currently running tasks, as well as any tasks
@@ -485,7 +486,8 @@ impl WPool {
         if matches!(self.status(), WPoolStatus::Stopped(_)) {
             return;
         }
-        if let Some(sender) = self.task_sender.as_ref() {
+        self.state.inc_waiting_queue_len();
+        if let Some(sender) = safe_lock(&self.task_sender).as_ref() {
             let _ = sender.send(signal);
         }
     }
@@ -503,23 +505,22 @@ impl WPool {
             self.resume();
             // Acquire lock so we can wait for any in-progress pauses.
             let shutdown_lock = safe_lock(&self.shutdown_lock);
+
+            if wait {
+                for _ in 0..self.max_workers {
+                    self.submit_signal(Signal::Terminate);
+                }
+            } else {
+                self.state.set_shutdown_now(true);
+                if let Some(sender) = safe_lock(&self.task_sender).take() {
+                    drop(sender);
+                }
+            }
+
+            self.state.join_worker_handles();
+
             self.set_status(WPoolStatus::Stopped(wait));
             drop(shutdown_lock);
-
-            // SAFETY : task_sender will not be used beyond this point. There [should] be ZERO
-            // clones of task_sender, we are the only thread that should own a
-            // task_channel.sender.
-            unsafe {
-                // Close the task channel.
-                // Get a mutable pointer to task_sender
-                let ptr: *mut Option<Sender<Signal>> = &self.task_sender as *const _ as *mut _;
-                drop((*ptr).take()); // Take the value out and drop the sender, closes channel.
-            }
-            self.state.join_worker_handles();
         });
-
-        //if let Some(handle) = safe_lock(&self.dispatcher_handle).take() {
-        //    let _ = handle.join();
-        //}
     }
 }

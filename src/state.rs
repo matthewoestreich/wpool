@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     },
     thread::{self, JoinHandle, ThreadId},
 };
@@ -15,6 +15,7 @@ pub(crate) struct State {
     pool_status: Arc<AtomicU8>,
     worker_handles: Arc<Mutex<HashMap<ThreadId, Option<JoinHandle<()>>>>>,
     panic_reports: Arc<Mutex<Vec<PanicReport>>>,
+    shutdown_now: Arc<AtomicBool>,
 }
 
 impl Clone for State {
@@ -25,6 +26,7 @@ impl Clone for State {
             pool_status: Arc::clone(&self.pool_status),
             worker_handles: Arc::clone(&self.worker_handles),
             panic_reports: Arc::clone(&self.panic_reports),
+            shutdown_now: Arc::clone(&self.shutdown_now),
         }
     }
 }
@@ -37,11 +39,20 @@ impl State {
             pool_status: Arc::new(AtomicU8::new(WPoolStatus::Running.as_u8())),
             worker_handles: Arc::new(Mutex::new(HashMap::new())),
             panic_reports: Arc::new(Mutex::new(Vec::new())),
+            shutdown_now: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub(crate) fn worker_count(&self) -> usize {
         self.worker_count.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn shutdown_now(&self) -> bool {
+        self.shutdown_now.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn set_shutdown_now(&self, v: bool) {
+        self.shutdown_now.store(v, Ordering::SeqCst);
     }
 
     #[allow(dead_code)]
@@ -91,6 +102,7 @@ impl State {
         if let Some(mut handle_opt) = safe_lock(&self.worker_handles).remove(&thread_id)
             && let Some(handle) = handle_opt.take()
         {
+            self.dec_worker_count();
             let _ = thread::spawn(move || {
                 let _ = handle.join();
             });

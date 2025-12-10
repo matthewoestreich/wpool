@@ -24,21 +24,36 @@ pub(crate) fn spawn(signal: Signal, worker_receiver: Receiver<Signal>, state: St
             }
 
             match signal_opt.take().expect("is_some()") {
-                Signal::Terminate => break,
+                Signal::Terminate => {
+                    println!("worker {:?} -> got terminate!", thread::current().id());
+                    break;
+                }
                 Signal::NewTask(task) | Signal::NewTaskWithConfirmation(task, _) => {
                     thread_state.dec_waiting_queue_len();
                     let task_result = catch_unwind(|| task.run());
                     if let Ok(pr) = PanicReport::try_from(task_result) {
+                        println!("worker {:?} -> panicked", thread::current().id());
                         thread_state.insert_panic_report(pr);
                     }
                 }
             }
+
+            if thread_state.shutdown_now() {
+                break;
+            }
+
             signal_opt = match worker_receiver_clone.recv() {
                 Ok(signal) => Some(signal),
                 Err(_) => break,
-            }
+            };
+
+            println!(
+                "worker {:?} -> got signal -> {signal_opt:?}",
+                thread::current().id()
+            );
         }
 
+        println!("worker {:?} -> exiting!", thread::current().id());
         thread_state.handle_worker_terminating(thread::current().id());
     });
 
