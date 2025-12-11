@@ -48,7 +48,6 @@ impl State {
         self.worker_count.fetch_add(1, Ordering::SeqCst);
     }
 
-    #[allow(dead_code)]
     pub(crate) fn dec_worker_count(&self) {
         self.worker_count.fetch_sub(1, Ordering::SeqCst);
     }
@@ -63,11 +62,6 @@ impl State {
 
     pub(crate) fn waiting_queue_len(&self) -> usize {
         self.waiting_queue_len.load(Ordering::SeqCst)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn set_waiting_queue_len(&self, len: usize) {
-        self.waiting_queue_len.store(len, Ordering::SeqCst);
     }
 
     pub(crate) fn inc_waiting_queue_len(&self) {
@@ -97,12 +91,10 @@ impl State {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn insert_worker_handle(&self, key: ThreadId, value: JoinHandle<()>) {
         safe_lock(&self.worker_handles).insert(key, Some(value));
     }
 
-    #[allow(dead_code)]
     pub(crate) fn join_worker_handles(&self) {
         let mut lock = safe_lock(&self.worker_handles);
 
