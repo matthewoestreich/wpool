@@ -56,8 +56,8 @@ fn handle_signal(signal: Signal, state: &State) {
 
             // Run the actual task.
             let task_result = catch_unwind(|| task.run());
-            if let Ok(pr) = PanicReport::try_from(task_result) {
-                state.insert_panic_report(pr);
+            if let Ok(panic_report) = PanicReport::try_from(task_result) {
+                state.insert_panic_report(panic_report);
             }
         }
     }
