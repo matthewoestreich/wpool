@@ -25,10 +25,6 @@ pub struct WPool {
     task_sender: Mutex<Option<Sender<Signal>>>,
 }
 
-impl Drop for WPool {
-    fn drop(&mut self) {}
-}
-
 impl WPool {
     // Private "quality-of-life" helper. Makes it so we don't have to update struct fields in multiple places.
     fn new_base(max_workers: usize, min_workers: usize) -> Self {
@@ -179,9 +175,7 @@ impl WPool {
     where
         F: FnOnce() + Send + Sync + RefUnwindSafe + UnwindSafe + 'static,
     {
-        let t = Task::new(task);
-        //let c = Mutex::new(None).into();
-        self.submit_signal(Signal::NewTask(t));
+        self.submit_signal(Signal::NewTask(Task::new(task)));
     }
 
     /// Enqueues the given function and blocks until it has been executed.
