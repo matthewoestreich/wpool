@@ -8,19 +8,19 @@ pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Spawns a new thread that runs signal tasks.
 pub(crate) fn spawn(task_receiver: Receiver<Signal>, state: State, min_workers: usize) {
-    let thread_receiver = task_receiver.clone();
-    let thread_state = state.clone();
+    let t_receiver = task_receiver.clone();
+    let t_state = state.clone();
 
     let handle = thread::spawn(move || {
         loop {
-            match thread_receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
+            match t_receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
                 Ok(signal) => {
-                    if !handle_signal(signal, &thread_state) {
+                    if !handle_signal(signal, &t_state) {
                         break;
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    if !handle_recv_timeout(&thread_state, min_workers) {
+                    if !handle_recv_timeout(&t_state, min_workers) {
                         break;
                     }
                 }
@@ -28,7 +28,7 @@ pub(crate) fn spawn(task_receiver: Receiver<Signal>, state: State, min_workers: 
             };
         }
 
-        thread_state.handle_worker_terminating(thread::current().id());
+        t_state.join_worker(thread::current().id());
     });
 
     state.insert_worker_handle(handle);
@@ -70,10 +70,13 @@ fn handle_recv_timeout(state: &State, min_workers: usize) -> bool {
     if let Ok(mut pending_timeout) = state.pending_timeout() {
         match pending_timeout.as_ref() {
             Some(&thread_id) => {
-                if thread_id == thread::current().id() && state.worker_count() > min_workers {
-                    // Clear pending timeout and kill worker as it timed out.
+                if thread_id == thread::current().id() {
+                    // Clear pending timeout.
                     *pending_timeout = None;
-                    return false;
+                    // Only kill worker if we are above min_workers.
+                    if state.worker_count() > min_workers {
+                        return false;
+                    }
                 }
             }
             None => {

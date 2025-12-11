@@ -106,7 +106,7 @@ impl State {
         safe_lock(&self.inner.panic_reports).push(report);
     }
 
-    pub(crate) fn handle_worker_terminating(&self, thread_id: ThreadId) {
+    pub(crate) fn join_worker(&self, thread_id: ThreadId) {
         if let Some(mut handle_opt) = safe_lock(&self.inner.worker_handles).remove(&thread_id)
             && let Some(handle) = handle_opt.take()
         {
