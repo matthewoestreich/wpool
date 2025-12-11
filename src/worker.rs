@@ -7,8 +7,8 @@ use crate::{PanicReport, Signal, state::State};
 pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Spawns a new thread that runs signal tasks.
-pub(crate) fn spawn(worker_receiver: Receiver<Signal>, state: State, min_workers: usize) {
-    let thread_receiver = worker_receiver.clone();
+pub(crate) fn spawn(task_receiver: Receiver<Signal>, state: State, min_workers: usize) {
+    let thread_receiver = task_receiver.clone();
     let thread_state = state.clone();
 
     let handle = thread::spawn(move || {
