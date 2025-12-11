@@ -15,12 +15,13 @@ pub(crate) fn spawn(task_receiver: Receiver<Signal>, state: State, min_workers: 
         loop {
             match t_receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
                 Ok(signal) => {
-                    if !handle_signal(signal, &t_state) {
+                    handle_signal(signal, &t_state);
+                    if t_state.shutdown_now() {
                         break;
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    if !handle_recv_timeout(&t_state, min_workers) {
+                    if t_state.shutdown_now() || !handle_recv_timeout(&t_state, min_workers) {
                         break;
                     }
                 }
@@ -34,7 +35,7 @@ pub(crate) fn spawn(task_receiver: Receiver<Signal>, state: State, min_workers: 
     state.insert_worker_handle(handle);
 }
 
-fn handle_signal(signal: Signal, state: &State) -> bool {
+fn handle_signal(signal: Signal, state: &State) {
     // Confirm signal if needed.
     if let Some(confirmation) = signal.take_confirm() {
         drop(confirmation);
@@ -60,9 +61,6 @@ fn handle_signal(signal: Signal, state: &State) -> bool {
             }
         }
     }
-
-    // If shutdown_now is true, we want to return false.
-    !state.shutdown_now()
 }
 
 fn handle_recv_timeout(state: &State, min_workers: usize) -> bool {
@@ -85,5 +83,6 @@ fn handle_recv_timeout(state: &State, min_workers: usize) -> bool {
             }
         }
     }
+
     true
 }
