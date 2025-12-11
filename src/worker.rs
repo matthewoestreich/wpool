@@ -14,19 +14,18 @@ pub(crate) fn spawn(task_receiver: Receiver<Signal>, state: State, min_workers: 
     let handle = thread::spawn(move || {
         loop {
             match t_receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
-                Ok(signal) => {
-                    handle_signal(signal, &t_state);
-                    if t_state.shutdown_now() {
-                        break;
-                    }
-                }
+                Ok(signal) => handle_signal(signal, &t_state),
                 Err(RecvTimeoutError::Timeout) => {
-                    if t_state.shutdown_now() || !handle_recv_timeout(&t_state, min_workers) {
+                    if !handle_recv_timeout(&t_state, min_workers) {
                         break;
                     }
                 }
                 Err(RecvTimeoutError::Disconnected) => break,
             };
+
+            if t_state.shutdown_now() {
+                break;
+            }
         }
 
         t_state.join_worker(thread::current().id());
