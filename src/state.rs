@@ -9,79 +9,104 @@ use std::{
 
 use crate::{AsWPoolStatus, PanicReport, WPoolStatus, safe_lock};
 
+struct StateInnerGuarded {
+    worker_handles: HashMap<ThreadId, Option<JoinHandle<()>>>,
+    panic_reports: Vec<PanicReport>,
+}
+
+struct StateInner {
+    worker_count: AtomicUsize,
+    waiting_queue_len: AtomicUsize,
+    pool_status: AtomicU8,
+    shutdown_now: AtomicBool,
+    guarded: Mutex<StateInnerGuarded>,
+}
+
+impl StateInner {
+    pub(crate) fn new(worker_count: usize) -> Self {
+        Self {
+            worker_count: AtomicUsize::new(worker_count),
+            waiting_queue_len: AtomicUsize::new(0),
+            pool_status: AtomicU8::new(WPoolStatus::Running.as_u8()),
+            shutdown_now: AtomicBool::new(false),
+            guarded: Mutex::new(StateInnerGuarded {
+                worker_handles: HashMap::new(),
+                panic_reports: Vec::new(),
+            }),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct State {
-    worker_count: Arc<AtomicUsize>,
-    waiting_queue_len: Arc<AtomicUsize>,
-    pool_status: Arc<AtomicU8>,
-    worker_handles: Arc<Mutex<HashMap<ThreadId, Option<JoinHandle<()>>>>>,
-    panic_reports: Arc<Mutex<Vec<PanicReport>>>,
-    shutdown_now: Arc<AtomicBool>,
+    inner: Arc<StateInner>,
 }
 
 impl State {
     pub(crate) fn new(worker_count: usize) -> Self {
         Self {
-            worker_count: Arc::new(AtomicUsize::new(worker_count)),
-            waiting_queue_len: Arc::new(AtomicUsize::new(0)),
-            pool_status: Arc::new(AtomicU8::new(WPoolStatus::Running.as_u8())),
-            worker_handles: Arc::new(Mutex::new(HashMap::new())),
-            panic_reports: Arc::new(Mutex::new(Vec::new())),
-            shutdown_now: Arc::new(AtomicBool::new(false)),
+            inner: Arc::new(StateInner::new(worker_count)),
         }
     }
 
     pub(crate) fn worker_count(&self) -> usize {
-        self.worker_count.load(Ordering::SeqCst)
+        self.inner.worker_count.load(Ordering::SeqCst)
     }
 
     pub(crate) fn shutdown_now(&self) -> bool {
-        self.shutdown_now.load(Ordering::SeqCst)
+        self.inner.shutdown_now.load(Ordering::SeqCst)
     }
 
     pub(crate) fn set_shutdown_now(&self, v: bool) {
-        self.shutdown_now.store(v, Ordering::SeqCst);
+        self.inner.shutdown_now.store(v, Ordering::SeqCst);
     }
 
     #[allow(dead_code)]
     pub(crate) fn inc_worker_count(&self) {
-        self.worker_count.fetch_add(1, Ordering::SeqCst);
+        self.inner.worker_count.fetch_add(1, Ordering::SeqCst);
     }
 
     pub(crate) fn dec_worker_count(&self) {
-        self.worker_count.fetch_sub(1, Ordering::SeqCst);
+        self.inner.worker_count.fetch_sub(1, Ordering::SeqCst);
     }
 
     pub(crate) fn pool_status(&self) -> WPoolStatus {
-        self.pool_status.load(Ordering::SeqCst).as_wpool_status()
+        self.inner
+            .pool_status
+            .load(Ordering::SeqCst)
+            .as_wpool_status()
     }
 
     pub(crate) fn set_pool_status(&self, status: WPoolStatus) {
-        self.pool_status.store(status.as_u8(), Ordering::SeqCst);
+        self.inner
+            .pool_status
+            .store(status.as_u8(), Ordering::SeqCst);
     }
 
     pub(crate) fn waiting_queue_len(&self) -> usize {
-        self.waiting_queue_len.load(Ordering::SeqCst)
+        self.inner.waiting_queue_len.load(Ordering::SeqCst)
     }
 
     pub(crate) fn inc_waiting_queue_len(&self) {
-        self.waiting_queue_len.fetch_add(1, Ordering::SeqCst);
+        self.inner.waiting_queue_len.fetch_add(1, Ordering::SeqCst);
     }
 
     pub(crate) fn dec_waiting_queue_len(&self) {
-        self.waiting_queue_len.fetch_sub(1, Ordering::SeqCst);
+        self.inner.waiting_queue_len.fetch_sub(1, Ordering::SeqCst);
     }
 
     pub(crate) fn panic_reports(&self) -> Vec<PanicReport> {
-        safe_lock(&self.panic_reports).clone()
+        safe_lock(&self.inner.guarded).panic_reports.clone()
     }
 
     pub(crate) fn insert_panic_report(&self, report: PanicReport) {
-        safe_lock(&self.panic_reports).push(report);
+        safe_lock(&self.inner.guarded).panic_reports.push(report);
     }
 
     pub(crate) fn handle_worker_terminating(&self, thread_id: ThreadId) {
-        if let Some(mut handle_opt) = safe_lock(&self.worker_handles).remove(&thread_id)
+        if let Some(mut handle_opt) = safe_lock(&self.inner.guarded)
+            .worker_handles
+            .remove(&thread_id)
             && let Some(handle) = handle_opt.take()
         {
             self.dec_worker_count();
@@ -92,18 +117,21 @@ impl State {
     }
 
     pub(crate) fn insert_worker_handle(&self, handle: JoinHandle<()>) {
-        safe_lock(&self.worker_handles).insert(handle.thread().id(), Some(handle));
+        safe_lock(&self.inner.guarded)
+            .worker_handles
+            .insert(handle.thread().id(), Some(handle));
     }
 
     pub(crate) fn join_worker_handles(&self) {
-        let mut lock = safe_lock(&self.worker_handles);
+        let mut lock = safe_lock(&self.inner.guarded);
 
         let handles: Vec<JoinHandle<()>> = lock
+            .worker_handles
             .drain()
             .filter_map(|(_, maybe_handle)| maybe_handle)
             .collect();
 
-        self.worker_count.store(0, Ordering::SeqCst);
+        self.inner.worker_count.store(0, Ordering::SeqCst);
         drop(lock); // Don't join while holding lock.
 
         for handle in handles {

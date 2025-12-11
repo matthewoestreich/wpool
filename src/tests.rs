@@ -283,6 +283,7 @@ fn test_capture_example_in_readme() {
         println!("{my_foo:?}");
     });
 
+    println!("stop_wait");
     wp.stop_wait();
 }
 

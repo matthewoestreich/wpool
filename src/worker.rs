@@ -1,8 +1,10 @@
-use std::{panic::catch_unwind, thread};
+use std::{panic::catch_unwind, thread, time::Duration};
 
 use crossbeam_channel::Receiver;
 
 use crate::{PanicReport, Signal, state::State};
+
+pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Spawns a new thread that runs signal tasks.
 pub(crate) fn spawn(signal: Signal, worker_receiver: Receiver<Signal>, state: State) {
