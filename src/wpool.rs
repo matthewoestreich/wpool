@@ -48,7 +48,7 @@ impl WPool {
             shutdown_lock: Channel::new_unbounded().into(),
             stop_once: Once::new(),
             state,
-            task_receiver: task_channel.receiver.clone(),
+            task_receiver: task_channel.receiver,
             task_sender: Some(task_channel.sender).into(),
         }
     }
