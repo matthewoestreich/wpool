@@ -4,9 +4,7 @@ use crossbeam_channel::Receiver;
 
 use crate::{PanicReport, Signal, state::State};
 
-/// Spawns a new thread that runs signal tasks. A worker thread will run
-/// the signal task that was given to it during creation, then listen for
-/// new tasks on the worker channel.
+/// Spawns a new thread that runs signal tasks.
 pub(crate) fn spawn(signal: Signal, worker_receiver: Receiver<Signal>, state: State) {
     let worker_receiver_clone = worker_receiver.clone();
     let thread_state = state.clone();
@@ -15,11 +13,7 @@ pub(crate) fn spawn(signal: Signal, worker_receiver: Receiver<Signal>, state: St
         let mut signal_opt = Some(signal);
 
         while signal_opt.is_some() {
-            if let Some(confirmation) = signal_opt
-                .as_ref()
-                .expect("called is_some()")
-                .take_confirm()
-            {
+            if let Some(confirmation) = signal_opt.as_ref().expect("is_some()").take_confirm() {
                 drop(confirmation);
             }
 
@@ -33,6 +27,7 @@ pub(crate) fn spawn(signal: Signal, worker_receiver: Receiver<Signal>, state: St
                 }
             }
 
+            // If `.stop()` was called on the pool.
             if thread_state.shutdown_now() {
                 break;
             }
@@ -46,5 +41,5 @@ pub(crate) fn spawn(signal: Signal, worker_receiver: Receiver<Signal>, state: St
         thread_state.handle_worker_terminating(thread::current().id());
     });
 
-    state.insert_worker_handle(handle.thread().id(), handle);
+    state.insert_worker_handle(handle);
 }

@@ -91,8 +91,8 @@ impl State {
         }
     }
 
-    pub(crate) fn insert_worker_handle(&self, key: ThreadId, value: JoinHandle<()>) {
-        safe_lock(&self.worker_handles).insert(key, Some(value));
+    pub(crate) fn insert_worker_handle(&self, handle: JoinHandle<()>) {
+        safe_lock(&self.worker_handles).insert(handle.thread().id(), Some(handle));
     }
 
     pub(crate) fn join_worker_handles(&self) {

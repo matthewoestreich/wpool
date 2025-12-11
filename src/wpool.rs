@@ -500,13 +500,13 @@ impl WPool {
 
     fn shutdown(&self, wait: bool) {
         self.stop_once.call_once(|| {
-            self.resume();
-            // Acquire lock so we can wait for any in-progress pauses.
-            let shutdown_lock = safe_lock(&self.shutdown_lock);
+            self.resume(); // If we are paused, resume the pool.
+            let shutdown_lock = safe_lock(&self.shutdown_lock); // Acquire lock so we can wait for any in-progress pauses.
 
             if let Some(sender) = safe_lock(&self.task_sender).take() {
                 drop(sender);
             }
+
             if !wait {
                 self.state.set_shutdown_now(true);
             }
