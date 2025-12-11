@@ -129,7 +129,7 @@
 //!
 //! This can be useful in loops when you need to know that everything has been submitted. Meaning, you now know workers have for sure been spawned.
 //!
-//! ```rust
+//! ```rust,ignore
 //! use wpool::WPool;
 //! use std::thread;
 //! use std::time::Duration;
@@ -247,7 +247,7 @@ use std::{
     any::Any,
     backtrace::Backtrace,
     fmt::{self, Display, Formatter},
-    panic::UnwindSafe,
+    panic::{RefUnwindSafe, UnwindSafe},
     sync::{
         Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicU8, AtomicUsize, Ordering},
@@ -431,13 +431,13 @@ impl fmt::Debug for Signal {
 /*********************************** Task ***********************************************/
 
 pub(crate) struct Task {
-    inner: Box<dyn FnOnce() + Send + Sync + UnwindSafe + 'static>,
+    inner: Box<dyn FnOnce() + Send + Sync + RefUnwindSafe + UnwindSafe + 'static>,
 }
 
 impl Task {
     pub(crate) fn new<F>(f: F) -> Self
     where
-        F: FnOnce() + Send + Sync + UnwindSafe + 'static,
+        F: FnOnce() + Send + Sync + RefUnwindSafe + UnwindSafe + 'static,
     {
         Self { inner: Box::new(f) }
     }

@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     },
     thread::{self, JoinHandle, ThreadId},
@@ -9,17 +9,14 @@ use std::{
 
 use crate::{AsWPoolStatus, PanicReport, WPoolStatus, safe_lock};
 
-struct StateInnerGuarded {
-    worker_handles: HashMap<ThreadId, Option<JoinHandle<()>>>,
-    panic_reports: Vec<PanicReport>,
-}
-
 struct StateInner {
     worker_count: AtomicUsize,
     waiting_queue_len: AtomicUsize,
     pool_status: AtomicU8,
     shutdown_now: AtomicBool,
-    guarded: Mutex<StateInnerGuarded>,
+    worker_handles: Mutex<HashMap<ThreadId, Option<JoinHandle<()>>>>,
+    panic_reports: Mutex<Vec<PanicReport>>,
+    pending_timeout: Mutex<Option<ThreadId>>,
 }
 
 impl StateInner {
@@ -29,10 +26,9 @@ impl StateInner {
             waiting_queue_len: AtomicUsize::new(0),
             pool_status: AtomicU8::new(WPoolStatus::Running.as_u8()),
             shutdown_now: AtomicBool::new(false),
-            guarded: Mutex::new(StateInnerGuarded {
-                worker_handles: HashMap::new(),
-                panic_reports: Vec::new(),
-            }),
+            pending_timeout: None.into(),
+            worker_handles: HashMap::new().into(),
+            panic_reports: Vec::new().into(),
         }
     }
 }
@@ -47,6 +43,13 @@ impl State {
         Self {
             inner: Arc::new(StateInner::new(worker_count)),
         }
+    }
+
+    pub(crate) fn pending_timeout(
+        &self,
+    ) -> Result<MutexGuard<'_, Option<ThreadId>>, PoisonError<MutexGuard<'_, Option<ThreadId>>>>
+    {
+        self.inner.pending_timeout.lock()
     }
 
     pub(crate) fn worker_count(&self) -> usize {
@@ -96,17 +99,15 @@ impl State {
     }
 
     pub(crate) fn panic_reports(&self) -> Vec<PanicReport> {
-        safe_lock(&self.inner.guarded).panic_reports.clone()
+        safe_lock(&self.inner.panic_reports).clone()
     }
 
     pub(crate) fn insert_panic_report(&self, report: PanicReport) {
-        safe_lock(&self.inner.guarded).panic_reports.push(report);
+        safe_lock(&self.inner.panic_reports).push(report);
     }
 
     pub(crate) fn handle_worker_terminating(&self, thread_id: ThreadId) {
-        if let Some(mut handle_opt) = safe_lock(&self.inner.guarded)
-            .worker_handles
-            .remove(&thread_id)
+        if let Some(mut handle_opt) = safe_lock(&self.inner.worker_handles).remove(&thread_id)
             && let Some(handle) = handle_opt.take()
         {
             self.dec_worker_count();
@@ -117,16 +118,13 @@ impl State {
     }
 
     pub(crate) fn insert_worker_handle(&self, handle: JoinHandle<()>) {
-        safe_lock(&self.inner.guarded)
-            .worker_handles
-            .insert(handle.thread().id(), Some(handle));
+        safe_lock(&self.inner.worker_handles).insert(handle.thread().id(), Some(handle));
     }
 
     pub(crate) fn join_worker_handles(&self) {
-        let mut lock = safe_lock(&self.inner.guarded);
+        let mut lock = safe_lock(&self.inner.worker_handles);
 
         let handles: Vec<JoinHandle<()>> = lock
-            .worker_handles
             .drain()
             .filter_map(|(_, maybe_handle)| maybe_handle)
             .collect();

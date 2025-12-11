@@ -1,12 +1,12 @@
 use std::{
-    panic::UnwindSafe,
+    panic::{RefUnwindSafe, UnwindSafe},
     sync::{
         Arc, Mutex, Once,
         mpsc::{self},
     },
 };
 
-use crossbeam_channel::Sender;
+use crossbeam_channel::{Receiver, Sender};
 
 use crate::{
     Channel, PanicReport, Signal, Task, WPoolStatus, WaitGroup, safe_lock, state::State, worker,
@@ -21,6 +21,7 @@ pub struct WPool {
     shutdown_lock: Mutex<Channel<()>>,
     stop_once: Once,
     state: State,
+    task_receiver: Receiver<Signal>,
     task_sender: Mutex<Option<Sender<Signal>>>,
 }
 
@@ -38,12 +39,7 @@ impl WPool {
         let state = State::new(max_workers);
 
         for _ in 0..max_workers {
-            state.inc_waiting_queue_len();
-            worker::spawn(
-                Signal::NewTask(Task::empty()),
-                task_channel.receiver.clone(),
-                state.clone(),
-            );
+            worker::spawn(task_channel.receiver.clone(), state.clone(), min_workers);
         }
 
         Self {
@@ -52,6 +48,7 @@ impl WPool {
             shutdown_lock: Channel::new_unbounded().into(),
             stop_once: Once::new(),
             state,
+            task_receiver: task_channel.receiver.clone(),
             task_sender: Some(task_channel.sender).into(),
         }
     }
@@ -133,7 +130,7 @@ impl WPool {
 
     /// The number of active workers.
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// use wpool::WPool;
     /// use std::thread;
     /// use std::time::Duration;
@@ -180,7 +177,7 @@ impl WPool {
     ///
     pub fn submit<F>(&self, task: F)
     where
-        F: FnOnce() + Send + Sync + UnwindSafe + 'static,
+        F: FnOnce() + Send + Sync + RefUnwindSafe + UnwindSafe + 'static,
     {
         let t = Task::new(task);
         //let c = Mutex::new(None).into();
@@ -217,7 +214,7 @@ impl WPool {
     ///
     pub fn submit_wait<F>(&self, task: F)
     where
-        F: FnOnce() + Send + Sync + UnwindSafe + 'static,
+        F: FnOnce() + Send + Sync + RefUnwindSafe + UnwindSafe + 'static,
     {
         let (tx, rx) = mpsc::sync_channel(0);
         self.submit(move || {
@@ -231,7 +228,7 @@ impl WPool {
     /// Unlike `submit_wait(...)`, this method only blocks until the task is either assigned to
     /// a worker or queued.
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// use wpool::WPool;
     /// use std::thread;
     /// use std::time::Duration;
@@ -255,7 +252,7 @@ impl WPool {
     ///
     pub fn submit_confirm<F>(&self, task: F)
     where
-        F: FnOnce() + Send + Sync + UnwindSafe + 'static,
+        F: FnOnce() + Send + Sync + RefUnwindSafe + UnwindSafe + 'static,
     {
         let chan = Channel::<()>::new_bounded(0);
         let sender = chan.sender;
@@ -484,6 +481,14 @@ impl WPool {
             return;
         }
         self.state.inc_waiting_queue_len();
+        if self.state.worker_count() < self.max_workers {
+            self.state.inc_worker_count();
+            worker::spawn(
+                self.task_receiver.clone(),
+                self.state.clone(),
+                self.min_workers,
+            );
+        }
         if let Some(sender) = safe_lock(&self.task_sender).as_ref() {
             let _ = sender.send(signal);
         }

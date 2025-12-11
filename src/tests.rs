@@ -11,7 +11,7 @@ use std::{
 
 use crossbeam_channel::{RecvTimeoutError, TryRecvError};
 
-use crate::{Channel, WaitGroup, safe_lock, wpool::WPool};
+use crate::{Channel, WaitGroup, safe_lock, worker::WORKER_IDLE_TIMEOUT, wpool::WPool};
 
 /*
 fn detect_leaky_threads<F>(f: F)
@@ -719,7 +719,6 @@ fn test_example_get_results_from_task() {
 }
 
 #[test]
-#[ignore]
 fn test_idle_worker() {
     let max_workers = 3;
     let num_jobs = max_workers + 1;
@@ -735,11 +734,10 @@ fn test_idle_worker() {
         });
     }
 
-    println!("853");
     // Ensure all workers have passed the timeout
-    //thread::sleep(WORKER_IDLE_TIMEOUT * ((max_workers + 1) as u32));
+    thread::sleep(WORKER_IDLE_TIMEOUT * ((max_workers + 1) as u32));
+    thread::sleep(Duration::from_secs(1));
     p.stop_wait();
-    println!("856");
     assert_eq!(p.worker_count(), 0);
 }
 
@@ -981,7 +979,6 @@ fn test_shutdown_during_pause() {
 }
 
 #[test]
-#[ignore]
 fn test_worker_timeout_during_pause() {
     let pool = Arc::new(WPool::new(2));
     let counter = Arc::new(AtomicUsize::new(0));
@@ -997,7 +994,7 @@ fn test_worker_timeout_during_pause() {
         pool_clone.pause();
     });
     // Wait enough for idle timeout to fire
-    //thread::sleep(WORKER_IDLE_TIMEOUT + Duration::from_millis(100));
+    thread::sleep(WORKER_IDLE_TIMEOUT + Duration::from_millis(100));
     // Now resume and stop
     pool.resume();
     pool.stop_wait();
