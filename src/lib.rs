@@ -400,8 +400,6 @@ pub(crate) type Confirmation = Arc<Mutex<Option<Sender<()>>>>;
 pub(crate) enum Signal {
     NewTask(Task),
     NewTaskWithConfirmation(Task, Confirmation),
-    #[allow(dead_code)]
-    Terminate,
 }
 
 impl Signal {
@@ -420,7 +418,6 @@ impl Display for Signal {
             Signal::NewTaskWithConfirmation(_, _) => {
                 write!(f, "Signal::NewTaskWithConfirmation(Task, Confirmation)")
             }
-            Signal::Terminate => write!(f, "Signal::Terminate"),
         }
     }
 }

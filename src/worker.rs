@@ -24,9 +24,6 @@ pub(crate) fn spawn(signal: Signal, worker_receiver: Receiver<Signal>, state: St
             }
 
             match signal_opt.take().expect("is_some()") {
-                Signal::Terminate => {
-                    break;
-                }
                 Signal::NewTask(task) | Signal::NewTaskWithConfirmation(task, _) => {
                     thread_state.dec_waiting_queue_len();
                     let task_result = catch_unwind(|| task.run());
