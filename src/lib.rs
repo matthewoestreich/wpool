@@ -447,7 +447,7 @@ impl Task {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn noop() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             inner: Box::new(|| {}),
         }

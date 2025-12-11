@@ -40,7 +40,7 @@ impl WPool {
         for _ in 0..max_workers {
             state.inc_waiting_queue_len();
             worker::spawn(
-                Signal::NewTask(Task::noop()),
+                Signal::NewTask(Task::empty()),
                 task_channel.receiver.clone(),
                 state.clone(),
             );
