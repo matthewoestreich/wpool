@@ -16,7 +16,6 @@ use crate::{
 /// without restricting how many tasks can be queued. Submitting tasks is non-blocking,
 /// so you can enqueue any number of tasks without waiting.
 pub struct WPool {
-    //dispatcher_handle: Mutex<Option<thread::JoinHandle<()>>>,
     max_workers: usize,
     min_workers: usize,
     shutdown_lock: Mutex<Channel<()>>,
