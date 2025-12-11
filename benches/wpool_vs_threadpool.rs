@@ -15,7 +15,7 @@ fn bench_submit_small_tasks(c: &mut Criterion) {
     // ---- WPool ----
     group.bench_function(
         format!(
-            "WPool submit {} small tasks with {} max workers",
+            "WPool [vs ThreadPool] submit {} small tasks with {} max workers",
             num_jobs, max_workers
         ),
         |b| {

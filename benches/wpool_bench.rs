@@ -5,7 +5,7 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
-    time::Duration,
+    // time::Duration,
 };
 use wpool::WPool;
 
@@ -13,23 +13,14 @@ fn bench_submit_small_tasks(c: &mut Criterion) {
     let max_workers = 8;
     let num_jobs = 5_000;
 
-    // Create thread pools once
-    //let wpool = Arc::new(WPool::new(max_workers));
-    //let rayon_pool = Arc::new(
-    //    ThreadPoolBuilder::new()
-    //        .num_threads(max_workers)
-    //        .build()
-    //        .unwrap(),
-    //);
-
     let mut group = c.benchmark_group("pool_submit");
-    group.measurement_time(Duration::from_millis(15000));
-    group.sample_size(20);
+    //group.measurement_time(Duration::from_millis(15000));
+    group.sample_size(50);
 
     // ---- WPool ----
     group.bench_function(
         format!(
-            "WPool submit {} small tasks with {} max workers",
+            "WPool [vs Rayon] submit {} small tasks with {} max workers",
             num_jobs, max_workers
         ),
         |b| {
