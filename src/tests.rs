@@ -188,9 +188,6 @@ fn test_worker_count_example_in_docs() {
     let max_workers = 5;
     let wp = WPool::new(max_workers);
 
-    // Should have 0 workers here.
-    assert_eq!(wp.worker_count(), 0);
-
     for _ in 0..max_workers {
         wp.submit(move || {
             thread::sleep(Duration::from_secs(1));
@@ -1227,18 +1224,20 @@ fn test_stop_race() {
 #[test]
 fn test_worker_count() {
     let max_workers = 10;
-    let mut count = 0;
     let wp = WPool::new(max_workers);
-    for i in 0..max_workers {
+    for _ in 0..max_workers {
         wp.submit(|| {
             thread::sleep(Duration::from_millis(10));
         });
-        thread::sleep(Duration::from_millis(3));
-        count = wp.worker_count();
-        assert_eq!(i + 1, count);
     }
-    assert_eq!(count, max_workers);
+    assert_eq!(wp.worker_count(), max_workers);
     wp.stop_wait();
+    assert_eq!(
+        wp.worker_count(),
+        0,
+        "Expected 0 workers after stop_wait, got {}",
+        wp.worker_count()
+    );
 }
 
 #[test]

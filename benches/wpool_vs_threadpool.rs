@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use criterion::{Criterion, criterion_group, criterion_main};
 use threadpool::ThreadPool;
 use wpool::WPool;
@@ -7,6 +9,7 @@ fn bench_submit_small_tasks(c: &mut Criterion) {
     let num_jobs = 5_000;
 
     let mut group = c.benchmark_group("pool_submit");
+    group.measurement_time(Duration::from_millis(15000));
     group.sample_size(20);
 
     // ---- WPool ----
