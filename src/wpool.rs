@@ -264,9 +264,7 @@ impl WPool {
             Task::new(task),
             Arc::new(Mutex::new(sender.into())),
         ));
-        println!("submit_confirm -> about to recv");
         let _ = chan.receiver.recv();
-        println!("    submit_confirm -> exiting!");
     }
 
     /// Stops the pool and waits for currently running tasks, as well as any tasks
@@ -513,9 +511,10 @@ impl WPool {
                 self.state.set_shutdown_now(true);
             }
 
-            self.state.join_worker_handles();
             self.set_status(WPoolStatus::Stopped(wait));
             drop(shutdown_lock);
+
+            self.state.join_worker_handles();
         });
     }
 }
