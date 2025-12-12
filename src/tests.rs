@@ -154,7 +154,6 @@ fn test_basic() {
 }
 
 #[test]
-#[ignore]
 fn test_min_workers_basic() {
     let max_workers = 2;
     let min_workers = 1;
@@ -165,8 +164,8 @@ fn test_min_workers_basic() {
         });
     }
     // Make sure max_workers amount of timeout time has passed.
-    //let sleep_for = ((max_workers + 1) as u32) * WORKER_IDLE_TIMEOUT;
-    //thread::sleep(sleep_for);
+    let sleep_for = ((max_workers + 1) as u32) * WORKER_IDLE_TIMEOUT;
+    thread::sleep(sleep_for);
     println!(
         "just before assert min_workers={min_workers} wp.worker_count() = {}",
         wp.worker_count()
@@ -239,27 +238,18 @@ fn test_zero_max_workers() {
 fn test_panic_panic_example_in_readme() {
     let wp = WPool::new(3);
     wp.submit(|| panic!("something went wrong!"));
-    println!("{:#?}", wp.get_workers_panic_info());
-    // [
-    //     PanicInfo {
-    //         thread_id: ThreadId(
-    //             4,
-    //         ),
-    //         payload: Some(
-    //             "something went wrong!",
-    //         ),
-    //         file: Some(
-    //             "src/tests.rs",
-    //         ),
-    //         line: Some(
-    //             179,
-    //         ),
-    //         column: Some(
-    //             18,
-    //         ),
-    //     },
-    // ]
     wp.stop_wait();
+    let panic_info = wp.get_workers_panic_info();
+    assert_eq!(panic_info.len(), 1);
+    // [
+    //     PanicReport {
+    //         thread_id: ThreadId(
+    //             3,
+    //         ),
+    //         message: "something went wrong!",
+    //         backtrace: <backtrace here, removed for brevity>,
+    //      },
+    // ]
 }
 
 #[test]

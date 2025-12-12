@@ -36,7 +36,7 @@
 //!
 //! `min_workers` defines (up to) the minimum number of worker threads that should always stay alive, even when the pool is idle. If `min_workers` is greater than `max_workers`, we panic.
 //!
-//! **NOTE**: *We do not 'pre-spawn' workers!* Meaning, if you set `min_workers = 3` but your pool only ever creates 2 workers, then only 2 workers will ever exist (and should always be alive).
+//! We pre-spawn `max_workers` number of workers upon instantiation.
 //!
 //! ```rust
 //! use wpool::WPool;
@@ -129,7 +129,7 @@
 //!
 //! This can be useful in loops when you need to know that everything has been submitted. Meaning, you now know workers have for sure been spawned.
 //!
-//! ```rust,ignore
+//! ```rust
 //! use wpool::WPool;
 //! use std::thread;
 //! use std::time::Duration;
@@ -142,8 +142,7 @@
 //!     wp.submit_confirm(|| {
 //!         thread::sleep(Duration::from_secs(2));
 //!     });
-//!     // Now you know that a worker has been spawned, or job placed in queue (which means we are already at max workers).
-//!     assert_eq!(wp.worker_count(), i);
+//!     // Now you know that your job has been placed in the queue or given to a worker.
 //! }
 //!
 //! assert_eq!(wp.worker_count(), max_workers);

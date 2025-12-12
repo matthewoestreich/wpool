@@ -6,8 +6,6 @@ A thread pool that limits the number of tasks executing concurrently, without re
 
 This library is essentially a port of [`workerpool`](https://github.com/gammazero/workerpool), an amazing Go library.
 
----
-
 # Examples
 
 ## Worker Maximum
@@ -42,7 +40,7 @@ pool.stop_wait();
 
 `min_workers` defines (up to) the minimum number of worker threads that should always stay alive, even when the pool is idle. If `min_workers` is greater than `max_workers`, we panic.
 
-**NOTE**: _We do not 'pre-spawn' workers!_ Meaning, if you set `min_workers = 3` but your pool only ever creates 2 workers, then only 2 workers will ever exist (and should always be alive).
+We pre-spawn `max_workers` number of workers upon instantiation.
 
 ```rust
 use wpool::WPool;
@@ -113,6 +111,8 @@ for i in 1..=100 {
         println!("job {i}");
     });
 }
+
+wp.stop_wait();
 ```
 
 ## Wait for Submission to Execute
@@ -146,10 +146,7 @@ for i in 1..=max_workers {
     wp.submit_confirm(|| {
         thread::sleep(Duration::from_secs(2));
     });
-    // Now you know that a worker has been spawned, or
-    // job placed in queue (which means we are already
-    // at max workers).
-    assert_eq!(wp.worker_count(), i);
+    // Now you know that your job has been placed in the queue or given to a worker.
 }
 
 assert_eq!(wp.worker_count(), max_workers);
@@ -253,3 +250,4 @@ Preferred.
 **With `cargo`**
 
 `cargo test --lib`
+

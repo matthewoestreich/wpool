@@ -126,7 +126,7 @@ impl WPool {
 
     /// The number of active workers.
     ///
-    /// ```rust,ignore
+    /// ```rust
     /// use wpool::WPool;
     /// use std::thread;
     /// use std::time::Duration;
@@ -134,8 +134,8 @@ impl WPool {
     /// let max_workers = 5;
     /// let wp = WPool::new(max_workers);
     ///
-    /// // Should have 0 workers here.
-    /// assert_eq!(wp.worker_count(), 0);
+    /// // Should have max workers here.
+    /// assert_eq!(wp.worker_count(), max_workers);
     ///
     /// for _ in 0..max_workers {
     ///     wp.submit(move || {
@@ -222,7 +222,7 @@ impl WPool {
     /// Unlike `submit_wait(...)`, this method only blocks until the task is either assigned to
     /// a worker or queued.
     ///
-    /// ```rust,ignore
+    /// ```rust
     /// use wpool::WPool;
     /// use std::thread;
     /// use std::time::Duration;
@@ -235,9 +235,7 @@ impl WPool {
     ///     wp.submit_confirm(|| {
     ///         thread::sleep(Duration::from_secs(2));
     ///     });
-    ///     // Now you know that a worker has been spawned, or job
-    ///     // placed in queue (which means we are already at max workers).
-    ///     assert_eq!(wp.worker_count(), i);
+    ///     // Now you know that a worker has been spawned, or job placed in queue.
     /// }
     ///
     /// assert_eq!(wp.worker_count(), max_workers);
