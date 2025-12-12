@@ -129,9 +129,7 @@ wp.stop_wait();
 
 ## Wait for Submission to be Submitted
 
-Wait until your submission is either given to a worker or queued. **Does not wait for you submission to be executed, only submitted.**
-
-This can be useful in loops when you need to know that everything has been submitted. Meaning, you now know workers have for sure been spawned.
+Wait until your submission is given to a worker. **Does not wait for you submission to be executed, only given to a worker.** Keep in mind, if you have long running tasks currently executing and all workers are busy, you could potentially block for an extended amount of time.
 
 ```rust
 use wpool::WPool;
@@ -142,7 +140,7 @@ let max_workers = 5;
 let wp = WPool::new(max_workers);
 
 for i in 1..=max_workers {
-    // Will block here until job is *submitted*.
+    // Will block here until job is *given to a worker*.
     wp.submit_confirm(|| {
         thread::sleep(Duration::from_secs(2));
     });
@@ -240,4 +238,3 @@ Preferred.
 **With `cargo`**
 
 `cargo test --lib`
-

@@ -26,7 +26,6 @@ pub struct WPool {
 }
 
 impl WPool {
-    // Private "quality-of-life" helper. Makes it so we don't have to update struct fields in multiple places.
     fn new_base(max_workers: usize, min_workers: usize) -> Self {
         assert!(max_workers > 0, "max_workers == 0");
         assert!(max_workers >= min_workers, "min_workers > max_workers");
@@ -174,7 +173,7 @@ impl WPool {
 
     /// Enqueues the given function and blocks until it has been executed.
     /// Unlike `submit_confirm(...)`, this method waits until the job has finished executing.
-    /// `submit_confirm(...)` only blocks until the task is either assigned to a worker or queued.
+    /// `submit_confirm(...)` only blocks until the task is either assigned to a worker.
     ///
     /// ```rust
     /// use wpool::WPool;
@@ -211,9 +210,8 @@ impl WPool {
         let _ = rx.recv(); // blocks until complete
     }
 
-    /// Enqueues the given function and blocks until it has been either given to a worker or queued.
-    /// Unlike `submit_wait(...)`, this method only blocks until the task is either assigned to
-    /// a worker or queued.
+    /// Enqueues the given function and blocks until it has been given to a worker.
+    /// Unlike `submit_wait(...)`, this method only blocks until the task is given to a worker.
     ///
     /// ```rust
     /// use wpool::WPool;
@@ -449,7 +447,9 @@ impl WPool {
         if matches!(self.status(), WPoolStatus::Stopped { .. }) {
             return;
         }
+
         self.state.inc_waiting_queue_len();
+
         if self.state.worker_count() < self.max_workers {
             self.state.inc_worker_count();
             worker::spawn(
@@ -458,6 +458,7 @@ impl WPool {
                 self.min_workers,
             );
         }
+
         if let Some(sender) = safe_lock(&self.task_sender).as_ref() {
             let _ = sender.send(signal);
         }
