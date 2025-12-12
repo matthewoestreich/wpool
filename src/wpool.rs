@@ -433,23 +433,13 @@ impl WPool {
     /// wp.submit_confirm(|| panic!("something went wrong!"));
     /// println!("{:#?}", wp.get_workers_panic_info());
     /// // [
-    /// //     PanicInfo {
+    /// //     PanicReport {
     /// //         thread_id: ThreadId(
-    /// //             9,
+    /// //             3,
     /// //         ),
-    /// //         payload: Some(
-    /// //             "something went wrong!",
-    /// //         ),
-    /// //         file: Some(
-    /// //             "src/file.rs",
-    /// //         ),
-    /// //         line: Some(
-    /// //             163,
-    /// //         ),
-    /// //         column: Some(
-    /// //             19,
-    /// //         ),
-    /// //     },
+    /// //         message: "something went wrong!",
+    /// //         backtrace: <backtrace here, removed for brevity>,
+    /// //      },
     /// // ]
     /// wp.stop_wait();
     /// ```
