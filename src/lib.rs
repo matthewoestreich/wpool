@@ -36,7 +36,7 @@
 //!
 //! `min_workers` defines (up to) the minimum number of worker threads that should always stay alive, even when the pool is idle. If `min_workers` is greater than `max_workers`, we panic.
 //!
-//! **NOTE**: *We do not 'pre-spawn' workers!* Meaning, if you set `min_workers = 3` but your pool only ever creates 2 workers, then only 2 workers will ever exist (and should always be alive).
+//! We pre-spawn `max_workers` number of workers upon instantiation.
 //!
 //! ```rust
 //! use wpool::WPool;
@@ -142,8 +142,7 @@
 //!     wp.submit_confirm(|| {
 //!         thread::sleep(Duration::from_secs(2));
 //!     });
-//!     // Now you know that a worker has been spawned, or job placed in queue (which means we are already at max workers).
-//!     assert_eq!(wp.worker_count(), i);
+//!     // Now you know that your job has been placed in the queue or given to a worker.
 //! }
 //!
 //! assert_eq!(wp.worker_count(), max_workers);
@@ -236,8 +235,6 @@
 #[cfg(test)]
 mod tests;
 
-mod channel;
-mod dispatcher;
 mod state;
 mod worker;
 mod wpool;
@@ -249,15 +246,15 @@ use std::{
     any::Any,
     backtrace::Backtrace,
     fmt::{self, Display, Formatter},
-    panic::RefUnwindSafe,
+    panic::{RefUnwindSafe, UnwindSafe},
     sync::{
         Arc, Condvar, Mutex, MutexGuard,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU8, AtomicUsize, Ordering},
     },
     thread::{self, ThreadId},
 };
 
-use crate::channel::Sender;
+use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 
 /************************************* [PUBLIC] PanicReport ******************************/
 
@@ -302,13 +299,44 @@ pub(crate) fn safe_lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     }
 }
 
+/************************************* Channel *******************************************/
+
+#[derive(Clone)]
+pub(crate) struct Channel<T> {
+    pub sender: Sender<T>,
+    pub receiver: Receiver<T>,
+}
+
+impl<T> Channel<T> {
+    pub(crate) fn new_bounded(cap: usize) -> Self {
+        let b = bounded(cap);
+        Self {
+            sender: b.0,
+            receiver: b.1,
+        }
+    }
+
+    pub(crate) fn new_unbounded() -> Self {
+        let ub = unbounded();
+        Self {
+            sender: ub.0,
+            receiver: ub.1,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn drop_sender(self) {
+        drop(self.sender);
+    }
+}
+
 /************************************* WPoolStatus ***************************************/
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WPoolStatus {
     Running,
     Paused,
-    Stopped(bool),
+    Stopped { now: bool },
 }
 
 impl WPoolStatus {
@@ -316,8 +344,8 @@ impl WPoolStatus {
         match self {
             Self::Running => 0,
             Self::Paused => 1,
-            Self::Stopped(false) => 2,
-            Self::Stopped(true) => 3,
+            Self::Stopped { now: false } => 2,
+            Self::Stopped { now: true } => 3,
         }
     }
 
@@ -325,8 +353,8 @@ impl WPoolStatus {
         match v {
             0 => Self::Running,
             1 => Self::Paused,
-            2 => Self::Stopped(false),
-            3 => Self::Stopped(true),
+            2 => Self::Stopped { now: false },
+            3 => Self::Stopped { now: true },
             _ => unreachable!(),
         }
     }
@@ -337,7 +365,7 @@ impl Display for WPoolStatus {
         match self {
             WPoolStatus::Running => write!(f, "WPoolStatus::Running"),
             WPoolStatus::Paused => write!(f, "WPoolStatus::Paused"),
-            WPoolStatus::Stopped(wait) => write!(f, "WPoolStatus::Stopped(wait={wait})"),
+            WPoolStatus::Stopped { now } => write!(f, "WPoolStatus::Stopped(now={now})"),
         }
     }
 }
@@ -349,26 +377,33 @@ impl fmt::Debug for WPoolStatus {
 }
 
 pub(crate) trait AsWPoolStatus {
-    fn as_enum(&self) -> WPoolStatus;
+    fn as_wpool_status(&self) -> WPoolStatus;
 }
 
 impl AsWPoolStatus for u8 {
-    fn as_enum(&self) -> WPoolStatus {
+    fn as_wpool_status(&self) -> WPoolStatus {
         WPoolStatus::from_u8(*self)
+    }
+}
+
+impl AsWPoolStatus for AtomicU8 {
+    fn as_wpool_status(&self) -> WPoolStatus {
+        WPoolStatus::from_u8(self.load(Ordering::SeqCst))
     }
 }
 
 /*********************************** Signal **********************************************/
 
-#[derive(Clone)]
+pub(crate) type Confirmation = Arc<Mutex<Option<Sender<()>>>>;
+
 pub(crate) enum Signal {
-    NewTask(Task, Arc<Mutex<Option<Sender<()>>>>),
-    Terminate,
+    NewTask(Task),
+    NewTaskWithConfirmation(Task, Confirmation),
 }
 
 impl Signal {
     pub(crate) fn take_confirm(&self) -> Option<Sender<()>> {
-        if let Signal::NewTask(_, confirm) = self {
+        if let Signal::NewTaskWithConfirmation(_, confirm) = self {
             return safe_lock(confirm).take();
         }
         None
@@ -378,14 +413,10 @@ impl Signal {
 impl Display for Signal {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            Signal::NewTask(_, confirm) => {
-                if safe_lock(confirm).is_some() {
-                    write!(f, "Signal::NewTask(Task, Confirm)")
-                } else {
-                    write!(f, "Signal::NewTask(Task)")
-                }
+            Signal::NewTask(_) => write!(f, "Signal::NewTask(Task)"),
+            Signal::NewTaskWithConfirmation(_, _) => {
+                write!(f, "Signal::NewTaskWithConfirmation(Task, Confirmation)")
             }
-            Signal::Terminate => write!(f, "Signal::Terminate"),
         }
     }
 }
@@ -399,41 +430,26 @@ impl fmt::Debug for Signal {
 /*********************************** Task ***********************************************/
 
 pub(crate) struct Task {
-    inner: Arc<dyn Fn() + Send + Sync + RefUnwindSafe + 'static>,
-}
-
-impl Clone for Task {
-    fn clone(&self) -> Self {
-        Task {
-            inner: Arc::clone(&self.inner),
-        }
-    }
+    inner: Box<dyn FnOnce() + Send + Sync + RefUnwindSafe + UnwindSafe + 'static>,
 }
 
 impl Task {
-    pub fn new<F>(f: F) -> Self
+    pub(crate) fn new<F>(f: F) -> Self
     where
-        F: FnOnce() + Send + 'static,
+        F: FnOnce() + Send + Sync + RefUnwindSafe + UnwindSafe + 'static,
     {
-        let f = Mutex::new(Some(f));
-        Self {
-            inner: Arc::new(move || {
-                if let Some(f) = safe_lock(&f).take() {
-                    f();
-                }
-            }),
-        }
+        Self { inner: Box::new(f) }
+    }
+
+    pub(crate) fn run(self) {
+        (self.inner)();
     }
 
     #[allow(dead_code)]
-    pub fn noop() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
-            inner: Arc::new(|| {}),
+            inner: Box::new(|| {}),
         }
-    }
-
-    pub fn run(&self) {
-        (self.inner)();
     }
 }
 

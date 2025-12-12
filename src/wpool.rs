@@ -1,43 +1,28 @@
 use std::{
+    panic::{RefUnwindSafe, UnwindSafe},
     sync::{
         Arc, Mutex, Once,
         mpsc::{self},
     },
-    thread::{self},
-    time::Duration,
 };
+
+use crossbeam_channel::{Receiver, Sender};
 
 use crate::{
-    PanicReport, Signal, Task, WPoolStatus, WaitGroup,
-    channel::{Channel, Sender, bounded, unbounded},
-    dispatcher::{DefaultDispatchStrategy, Dispatcher},
-    safe_lock,
-    state::{self, StateOps},
+    Channel, PanicReport, Signal, Task, WPoolStatus, WaitGroup, safe_lock, state::State, worker,
 };
-
-pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// `WPool` is a thread pool that limits the number of tasks executing concurrently,
 /// without restricting how many tasks can be queued. Submitting tasks is non-blocking,
 /// so you can enqueue any number of tasks without waiting.
 pub struct WPool {
-    dispatcher_handle: Mutex<Option<thread::JoinHandle<()>>>,
     max_workers: usize,
     min_workers: usize,
     shutdown_lock: Mutex<Channel<()>>,
     stop_once: Once,
-    state_manager_handle: Option<thread::JoinHandle<()>>,
-    pub(crate) state: StateOps,
-    task_sender: Sender<Signal>,
-}
-
-impl Drop for WPool {
-    fn drop(&mut self) {
-        self.state.drop_sender();
-        if let Some(handle) = self.state_manager_handle.take() {
-            let _ = handle.join();
-        }
-    }
+    state: State,
+    task_receiver: Receiver<Signal>,
+    task_sender: Mutex<Option<Sender<Signal>>>,
 }
 
 impl WPool {
@@ -46,28 +31,21 @@ impl WPool {
         assert!(max_workers > 0, "max_workers == 0");
         assert!(max_workers >= min_workers, "min_workers > max_workers");
 
-        let task_channel = unbounded();
-        let state_channel = unbounded();
+        let task_channel = Channel::new_unbounded();
+        let state = State::new(max_workers);
 
-        let state_ops = StateOps::new(state_channel.clone_sender());
-        let state_manager_handle = state::spawn_manager(state_channel.clone_receiver(), None);
-
-        let dispatcher = Dispatcher::new(DefaultDispatchStrategy::new(
-            min_workers,
-            max_workers,
-            task_channel.clone_receiver(),
-            state_ops.clone(),
-        ));
+        for _ in 0..max_workers {
+            worker::spawn(task_channel.receiver.clone(), state.clone(), min_workers);
+        }
 
         Self {
-            dispatcher_handle: Some(dispatcher.spawn()).into(),
             max_workers,
             min_workers,
-            shutdown_lock: unbounded().into(),
+            shutdown_lock: Channel::new_unbounded().into(),
             stop_once: Once::new(),
-            state_manager_handle: Some(state_manager_handle),
-            state: state_ops,
-            task_sender: task_channel.clone_sender(),
+            state,
+            task_receiver: task_channel.receiver,
+            task_sender: Some(task_channel.sender).into(),
         }
     }
 
@@ -156,8 +134,8 @@ impl WPool {
     /// let max_workers = 5;
     /// let wp = WPool::new(max_workers);
     ///
-    /// // Should have 0 workers here.
-    /// assert_eq!(wp.worker_count(), 0);
+    /// // Should have max workers here.
+    /// assert_eq!(wp.worker_count(), max_workers);
     ///
     /// for _ in 0..max_workers {
     ///     wp.submit(move || {
@@ -195,11 +173,9 @@ impl WPool {
     ///
     pub fn submit<F>(&self, task: F)
     where
-        F: FnOnce() + Send + 'static,
+        F: FnOnce() + Send + Sync + RefUnwindSafe + UnwindSafe + 'static,
     {
-        let t = Task::new(task);
-        let c = Mutex::new(None).into();
-        self.submit_signal(Signal::NewTask(t, c));
+        self.submit_signal(Signal::NewTask(Task::new(task)));
     }
 
     /// Enqueues the given function and blocks until it has been executed.
@@ -232,7 +208,7 @@ impl WPool {
     ///
     pub fn submit_wait<F>(&self, task: F)
     where
-        F: FnOnce() + Send + 'static,
+        F: FnOnce() + Send + Sync + RefUnwindSafe + UnwindSafe + 'static,
     {
         let (tx, rx) = mpsc::sync_channel(0);
         self.submit(move || {
@@ -259,9 +235,7 @@ impl WPool {
     ///     wp.submit_confirm(|| {
     ///         thread::sleep(Duration::from_secs(2));
     ///     });
-    ///     // Now you know that a worker has been spawned, or job
-    ///     // placed in queue (which means we are already at max workers).
-    ///     assert_eq!(wp.worker_count(), i);
+    ///     // Now you know that a worker has been spawned, or job placed in queue.
     /// }
     ///
     /// assert_eq!(wp.worker_count(), max_workers);
@@ -270,15 +244,15 @@ impl WPool {
     ///
     pub fn submit_confirm<F>(&self, task: F)
     where
-        F: FnOnce() + Send + 'static,
+        F: FnOnce() + Send + Sync + RefUnwindSafe + UnwindSafe + 'static,
     {
-        let chan = bounded(0);
-        let sender = Some(chan.clone_sender());
-        self.submit_signal(Signal::NewTask(
+        let chan = Channel::<()>::new_bounded(0);
+        let sender = chan.sender;
+        self.submit_signal(Signal::NewTaskWithConfirmation(
             Task::new(task),
-            Arc::new(Mutex::new(sender)),
+            Arc::new(Mutex::new(sender.into())),
         ));
-        let _ = chan.recv();
+        let _ = chan.receiver.recv();
     }
 
     /// Stops the pool and waits for currently running tasks, as well as any tasks
@@ -319,7 +293,7 @@ impl WPool {
     /// ```
     ///
     pub fn stop_wait(&self) {
-        self.shutdown(true);
+        self.shutdown(false);
     }
 
     /// `stop` stops the worker pool and waits for only currently running tasks to
@@ -360,7 +334,7 @@ impl WPool {
     /// ```
     ///
     pub fn stop(&self) {
-        self.shutdown(false);
+        self.shutdown(true);
     }
 
     /// Pause all possible workers and block until each worker has acknowledged that
@@ -404,7 +378,7 @@ impl WPool {
         let resume_signal = safe_lock(&self.shutdown_lock);
 
         let status = self.status();
-        if matches!(status, WPoolStatus::Stopped(_)) || status == WPoolStatus::Paused {
+        if matches!(status, WPoolStatus::Stopped { .. }) || status == WPoolStatus::Paused {
             return;
         }
 
@@ -412,7 +386,7 @@ impl WPool {
 
         for _ in 0..self.max_workers {
             let thread_ready = is_ready.clone();
-            let thread_resume_signal = resume_signal.clone_receiver();
+            let thread_resume_signal = resume_signal.receiver.clone();
             // Inject our pause semantics into a 'regular task' and submit to pool.
             self.submit(move || {
                 thread_ready.done();
@@ -440,14 +414,13 @@ impl WPool {
         let mut resume_signal = safe_lock(&self.shutdown_lock);
 
         let status = self.status();
-        if status != WPoolStatus::Paused || matches!(status, WPoolStatus::Stopped(_)) {
+        if status != WPoolStatus::Paused || matches!(status, WPoolStatus::Stopped { .. }) {
             return;
         }
 
-        // Close 'unpause signal' channel to unblock all workers.
-        resume_signal.drop_sender();
+        // Close 'unpause signal' channel to unblock all workers (reassigning the resume_signal transitively drops the sender)
         // Need to reset resume signal, so if pause is called again, it works.
-        *resume_signal = unbounded::<()>();
+        *resume_signal = Channel::<()>::new_unbounded();
         self.set_status(WPoolStatus::Running);
     }
 
@@ -496,10 +469,21 @@ impl WPool {
 
     /// Submit a Signal to the task channel.
     fn submit_signal(&self, signal: Signal) {
-        if matches!(self.status(), WPoolStatus::Stopped(_)) {
+        if matches!(self.status(), WPoolStatus::Stopped { .. }) {
             return;
         }
-        let _ = self.task_sender.send(signal);
+        self.state.inc_waiting_queue_len();
+        if self.state.worker_count() < self.max_workers {
+            self.state.inc_worker_count();
+            worker::spawn(
+                self.task_receiver.clone(),
+                self.state.clone(),
+                self.min_workers,
+            );
+        }
+        if let Some(sender) = safe_lock(&self.task_sender).as_ref() {
+            let _ = sender.send(signal);
+        }
     }
 
     fn status(&self) -> WPoolStatus {
@@ -510,19 +494,22 @@ impl WPool {
         self.state.set_pool_status(status);
     }
 
-    fn shutdown(&self, wait: bool) {
+    /// If `now = true` all tasks that are in the waiting queue are abandoned.
+    fn shutdown(&self, now: bool) {
         self.stop_once.call_once(|| {
+            // If we are paused, resume the pool.
             self.resume();
+
             // Acquire lock so we can wait for any in-progress pauses.
             let shutdown_lock = safe_lock(&self.shutdown_lock);
-            self.set_status(WPoolStatus::Stopped(wait));
+            self.set_status(WPoolStatus::Stopped { now });
             drop(shutdown_lock);
-            // Close tasks channel.
-            self.task_sender.drop();
-        });
 
-        if let Some(handle) = safe_lock(&self.dispatcher_handle).take() {
-            let _ = handle.join();
-        }
+            if let Some(sender) = safe_lock(&self.task_sender).take() {
+                drop(sender);
+            }
+
+            self.state.join_worker_handles();
+        });
     }
 }
