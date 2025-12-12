@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicU8, AtomicUsize, Ordering},
     },
     thread::{self, JoinHandle, ThreadId},
 };
@@ -13,7 +13,6 @@ struct StateInner {
     worker_count: AtomicUsize,
     waiting_queue_len: AtomicUsize,
     pool_status: AtomicU8,
-    shutdown_now: AtomicBool,
     worker_handles: Mutex<HashMap<ThreadId, Option<JoinHandle<()>>>>,
     panic_reports: Mutex<Vec<PanicReport>>,
     pending_timeout: Mutex<Option<ThreadId>>,
@@ -25,7 +24,6 @@ impl StateInner {
             worker_count: AtomicUsize::new(worker_count),
             waiting_queue_len: AtomicUsize::new(0),
             pool_status: AtomicU8::new(WPoolStatus::Running.as_u8()),
-            shutdown_now: AtomicBool::new(false),
             pending_timeout: None.into(),
             worker_handles: HashMap::new().into(),
             panic_reports: Vec::new().into(),
@@ -54,14 +52,6 @@ impl State {
 
     pub(crate) fn worker_count(&self) -> usize {
         self.inner.worker_count.load(Ordering::SeqCst)
-    }
-
-    pub(crate) fn shutdown_now(&self) -> bool {
-        self.inner.shutdown_now.load(Ordering::SeqCst)
-    }
-
-    pub(crate) fn set_shutdown_now(&self, v: bool) {
-        self.inner.shutdown_now.store(v, Ordering::SeqCst);
     }
 
     #[allow(dead_code)]

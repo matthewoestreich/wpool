@@ -337,7 +337,7 @@ impl<T> Channel<T> {
 pub(crate) enum WPoolStatus {
     Running,
     Paused,
-    Stopped(bool),
+    Stopped { now: bool },
 }
 
 impl WPoolStatus {
@@ -345,8 +345,8 @@ impl WPoolStatus {
         match self {
             Self::Running => 0,
             Self::Paused => 1,
-            Self::Stopped(false) => 2,
-            Self::Stopped(true) => 3,
+            Self::Stopped { now: false } => 2,
+            Self::Stopped { now: true } => 3,
         }
     }
 
@@ -354,8 +354,8 @@ impl WPoolStatus {
         match v {
             0 => Self::Running,
             1 => Self::Paused,
-            2 => Self::Stopped(false),
-            3 => Self::Stopped(true),
+            2 => Self::Stopped { now: false },
+            3 => Self::Stopped { now: true },
             _ => unreachable!(),
         }
     }
@@ -366,7 +366,7 @@ impl Display for WPoolStatus {
         match self {
             WPoolStatus::Running => write!(f, "WPoolStatus::Running"),
             WPoolStatus::Paused => write!(f, "WPoolStatus::Paused"),
-            WPoolStatus::Stopped(wait) => write!(f, "WPoolStatus::Stopped(wait={wait})"),
+            WPoolStatus::Stopped { now } => write!(f, "WPoolStatus::Stopped(now={now})"),
         }
     }
 }

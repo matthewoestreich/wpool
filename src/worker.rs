@@ -2,7 +2,7 @@ use std::{panic::catch_unwind, thread, time::Duration};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 
-use crate::{PanicReport, Signal, state::State};
+use crate::{PanicReport, Signal, WPoolStatus, state::State};
 
 pub(crate) static WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -23,7 +23,9 @@ pub(crate) fn spawn(task_receiver: Receiver<Signal>, state: State, min_workers: 
                 Err(RecvTimeoutError::Disconnected) => break,
             };
 
-            if t_state.shutdown_now() {
+            // `.stop()` was called on the pool, which means do not
+            // drain queue, shutdown immediately.
+            if t_state.pool_status() == (WPoolStatus::Stopped { now: true }) {
                 break;
             }
         }
@@ -42,9 +44,9 @@ fn handle_signal(signal: Signal, state: &State) {
 
     match signal {
         Signal::NewTask(task) | Signal::NewTaskWithConfirmation(task, _) => {
+            // Decrement wait queue length before running task.
             state.dec_waiting_queue_len();
-
-            // If we were pending termination, remove it since we got work.
+            // If we were pending termination remove it since we got work.
             if let Ok(mut pending_timeout) = state.pending_timeout()
                 && pending_timeout
                     .as_ref()
@@ -52,7 +54,6 @@ fn handle_signal(signal: Signal, state: &State) {
             {
                 *pending_timeout = None;
             }
-
             // Run the actual task.
             let task_result = catch_unwind(|| task.run());
             if let Ok(panic_report) = PanicReport::try_from(task_result) {
@@ -82,6 +83,5 @@ fn handle_recv_timeout(state: &State, min_workers: usize) -> bool {
             }
         }
     }
-
     true
 }

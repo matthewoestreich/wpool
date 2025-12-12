@@ -295,7 +295,7 @@ impl WPool {
     /// ```
     ///
     pub fn stop_wait(&self) {
-        self.shutdown(true);
+        self.shutdown(false);
     }
 
     /// `stop` stops the worker pool and waits for only currently running tasks to
@@ -336,7 +336,7 @@ impl WPool {
     /// ```
     ///
     pub fn stop(&self) {
-        self.shutdown(false);
+        self.shutdown(true);
     }
 
     /// Pause all possible workers and block until each worker has acknowledged that
@@ -380,7 +380,7 @@ impl WPool {
         let resume_signal = safe_lock(&self.shutdown_lock);
 
         let status = self.status();
-        if matches!(status, WPoolStatus::Stopped(_)) || status == WPoolStatus::Paused {
+        if matches!(status, WPoolStatus::Stopped { .. }) || status == WPoolStatus::Paused {
             return;
         }
 
@@ -416,7 +416,7 @@ impl WPool {
         let mut resume_signal = safe_lock(&self.shutdown_lock);
 
         let status = self.status();
-        if status != WPoolStatus::Paused || matches!(status, WPoolStatus::Stopped(_)) {
+        if status != WPoolStatus::Paused || matches!(status, WPoolStatus::Stopped { .. }) {
             return;
         }
 
@@ -471,7 +471,7 @@ impl WPool {
 
     /// Submit a Signal to the task channel.
     fn submit_signal(&self, signal: Signal) {
-        if matches!(self.status(), WPoolStatus::Stopped(_)) {
+        if matches!(self.status(), WPoolStatus::Stopped { .. }) {
             return;
         }
         self.state.inc_waiting_queue_len();
@@ -496,19 +496,17 @@ impl WPool {
         self.state.set_pool_status(status);
     }
 
-    fn shutdown(&self, wait: bool) {
+    /// If `now = true` all tasks that are in the waiting queue are abandoned.
+    fn shutdown(&self, now: bool) {
         self.stop_once.call_once(|| {
             self.resume(); // If we are paused, resume the pool.
 
             let shutdown_lock = safe_lock(&self.shutdown_lock); // Acquire lock so we can wait for any in-progress pauses.
-            self.set_status(WPoolStatus::Stopped(wait));
+            self.set_status(WPoolStatus::Stopped { now });
             drop(shutdown_lock);
 
             if let Some(sender) = safe_lock(&self.task_sender).take() {
                 drop(sender);
-            }
-            if !wait {
-                self.state.set_shutdown_now(true);
             }
 
             self.state.join_worker_handles();
