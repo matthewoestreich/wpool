@@ -499,9 +499,11 @@ impl WPool {
     /// If `now = true` all tasks that are in the waiting queue are abandoned.
     fn shutdown(&self, now: bool) {
         self.stop_once.call_once(|| {
-            self.resume(); // If we are paused, resume the pool.
+            // If we are paused, resume the pool.
+            self.resume();
 
-            let shutdown_lock = safe_lock(&self.shutdown_lock); // Acquire lock so we can wait for any in-progress pauses.
+            // Acquire lock so we can wait for any in-progress pauses.
+            let shutdown_lock = safe_lock(&self.shutdown_lock);
             self.set_status(WPoolStatus::Stopped { now });
             drop(shutdown_lock);
 

@@ -23,8 +23,7 @@ pub(crate) fn spawn(task_receiver: Receiver<Signal>, state: State, min_workers: 
                 Err(RecvTimeoutError::Disconnected) => break,
             };
 
-            // `.stop()` was called on the pool, which means do not
-            // drain queue, shutdown immediately.
+            // `.stop()` was called on the pool, which means do not drain queue, shutdown immediately.
             if t_state.pool_status() == (WPoolStatus::Stopped { now: true }) {
                 break;
             }
@@ -41,7 +40,6 @@ fn handle_signal(signal: Signal, state: &State) {
     if let Some(confirmation) = signal.take_confirm() {
         drop(confirmation);
     }
-
     match signal {
         Signal::NewTask(task) | Signal::NewTaskWithConfirmation(task, _) => {
             // Decrement wait queue length before running task.
