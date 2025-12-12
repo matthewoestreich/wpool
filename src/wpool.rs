@@ -62,7 +62,6 @@ impl WPool {
     /// let wp = WPool::new(max_workers);
     /// wp.stop_wait();
     /// ```
-    ///
     pub fn new(max_workers: usize) -> Self {
         Self::new_base(max_workers, 0)
     }
@@ -87,7 +86,6 @@ impl WPool {
     /// let wp = WPool::new_with_min(max_workers, min_workers);
     /// wp.stop_wait();
     /// ```
-    ///
     pub fn new_with_min(max_workers: usize, min_workers: usize) -> Self {
         Self::new_base(max_workers, min_workers)
     }
@@ -102,7 +100,6 @@ impl WPool {
     /// assert_eq!(wp.max_capacity(), max_workers);
     /// wp.stop_wait();
     /// ```
-    ///
     pub fn max_capacity(&self) -> usize {
         self.max_workers
     }
@@ -119,7 +116,6 @@ impl WPool {
     /// assert_eq!(wp.min_capacity(), min_workers);
     /// wp.stop_wait();
     /// ```
-    ///
     pub fn min_capacity(&self) -> usize {
         self.min_workers
     }
@@ -154,7 +150,6 @@ impl WPool {
     /// // Should have 0 workers now.
     /// assert_eq!(wp.worker_count(), 0);
     /// ```
-    ///
     pub fn worker_count(&self) -> usize {
         self.state.worker_count()
     }
@@ -170,7 +165,6 @@ impl WPool {
     ///
     /// As long as there are tasks in the wait queue, any additional new tasks are put in the
     /// wait queue. Tasks are removed from the wait queue as workers become available.
-    ///
     pub fn submit<F>(&self, task: F)
     where
         F: FnOnce() + Send + Sync + RefUnwindSafe + UnwindSafe + 'static,
@@ -205,7 +199,6 @@ impl WPool {
     /// assert_eq!(counter.load(Ordering::SeqCst), 1);
     /// wp.stop_wait();
     /// ```
-    ///
     pub fn submit_wait<F>(&self, task: F)
     where
         F: FnOnce() + Send + Sync + RefUnwindSafe + UnwindSafe + 'static,
@@ -241,7 +234,6 @@ impl WPool {
     /// assert_eq!(wp.worker_count(), max_workers);
     /// wp.stop_wait();
     /// ```
-    ///
     pub fn submit_confirm<F>(&self, task: F)
     where
         F: FnOnce() + Send + Sync + RefUnwindSafe + UnwindSafe + 'static,
@@ -291,7 +283,6 @@ impl WPool {
     /// // Verify that all jobs executed.
     /// assert_eq!(counter.load(Ordering::SeqCst), num_jobs);
     /// ```
-    ///
     pub fn stop_wait(&self) {
         self.shutdown(false);
     }
@@ -332,7 +323,6 @@ impl WPool {
     /// // Verify that only up to `max_workers` jobs were complete.
     /// assert_eq!(counter.load(Ordering::SeqCst), max_workers);
     /// ```
-    ///
     pub fn stop(&self) {
         self.shutdown(true);
     }
@@ -372,7 +362,6 @@ impl WPool {
     /// wp.resume();
     /// wp.stop_wait();
     /// ```
-    ///
     pub fn pause(&self) {
         // Acquire lock for duration of this process, so we aren't interrupted by a shutdown.
         let resume_signal = safe_lock(&self.shutdown_lock);
@@ -408,7 +397,6 @@ impl WPool {
     /// wp.resume();
     /// wp.stop_wait();
     /// ```
-    ///
     pub fn resume(&self) {
         // Acquire lock for duration of this process, so we aren't interrupted by a shutdown.
         let mut resume_signal = safe_lock(&self.shutdown_lock);
@@ -443,7 +431,6 @@ impl WPool {
     /// // ]
     /// wp.stop_wait();
     /// ```
-    ///
     pub fn get_workers_panic_info(&self) -> Vec<PanicReport> {
         self.state.panic_reports()
     }
