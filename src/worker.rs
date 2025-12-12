@@ -40,46 +40,48 @@ fn handle_signal(signal: Signal, state: &State) {
     if let Some(confirmation) = signal.take_confirm() {
         drop(confirmation);
     }
-    match signal {
-        Signal::Task(task) | Signal::TaskWithConfirmation(task, _) => {
-            // Decrement wait queue length before running task.
-            state.dec_waiting_queue_len();
-            // If we were pending termination remove it since we got work.
-            if let Ok(mut pending_timeout) = state.pending_timeout()
-                && pending_timeout
-                    .as_ref()
-                    .is_some_and(|&thread_id| thread_id == thread::current().id())
-            {
-                *pending_timeout = None;
-            }
-            // Run the actual task.
-            let task_result = catch_unwind(|| task.run());
-            if let Ok(panic_report) = PanicReport::try_from(task_result) {
-                state.insert_panic_report(panic_report);
-            }
-        }
+
+    let task = match signal {
+        Signal::Task(t) | Signal::TaskWithConfirmation(t, _) => t,
+    };
+
+    state.dec_waiting_queue_len();
+
+    if let Ok(mut pending) = state.pending_timeout()
+        && pending
+            .as_ref()
+            .is_some_and(|&thread_id| thread_id == thread::current().id())
+    {
+        *pending = None;
+    }
+
+    let task_result = catch_unwind(|| task.run());
+    if let Ok(panic_report) = PanicReport::try_from(task_result) {
+        state.insert_panic_report(panic_report);
     }
 }
 
 fn handle_recv_timeout(state: &State, min_workers: usize) -> bool {
     // We want to hold the lock for the duration of this block.
-    if let Ok(mut pending_timeout) = state.pending_timeout() {
-        match pending_timeout.as_ref() {
-            Some(&thread_id) => {
-                if thread_id == thread::current().id() {
-                    // Clear pending timeout.
-                    *pending_timeout = None;
-                    // Only kill worker if we are above min_workers.
-                    if state.worker_count() > min_workers {
-                        return false;
-                    }
+    let thread_id = thread::current().id();
+
+    let Ok(mut pending) = state.pending_timeout() else {
+        return true;
+    };
+
+    match pending.as_ref() {
+        Some(&id) => {
+            if id == thread_id {
+                *pending = None;
+                if state.worker_count() > min_workers {
+                    return false;
                 }
             }
-            None => {
-                // Worker now pending timeout.
-                *pending_timeout = Some(thread::current().id());
-            }
+        }
+        None => {
+            *pending = Some(thread_id);
         }
     }
+
     true
 }
