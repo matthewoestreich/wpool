@@ -168,7 +168,7 @@ impl WPool {
     where
         F: FnOnce() + Send + Sync + RefUnwindSafe + UnwindSafe + 'static,
     {
-        self.submit_signal(Signal::NewTask(Task::new(task)));
+        self.submit_signal(Signal::Task(Task::new(task)));
     }
 
     /// Enqueues the given function and blocks until it has been executed.
@@ -238,7 +238,7 @@ impl WPool {
     {
         let chan = Channel::<()>::new_bounded(0);
         let sender = chan.sender;
-        self.submit_signal(Signal::NewTaskWithConfirmation(
+        self.submit_signal(Signal::TaskWithConfirmation(
             Task::new(task),
             Arc::new(Mutex::new(sender.into())),
         ));

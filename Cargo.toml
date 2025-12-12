@@ -14,6 +14,12 @@ categories = ["asynchronous", "concurrency"]
 [profile.release]
 debug = true
 
+[profile.bench]
+opt-level = 3
+debug = false
+debug-assertions = false
+lto = true
+
 [dependencies]
 crossbeam-channel = "0.5.15"
 
@@ -24,7 +30,7 @@ rayon = "1.11"
 threadpool = "1.8.1"
 
 [[bench]]
-name = "wpool_bench"
+name = "wpool_vs_rayon"
 harness = false
 
 [[bench]]

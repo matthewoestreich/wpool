@@ -41,7 +41,7 @@ fn handle_signal(signal: Signal, state: &State) {
         drop(confirmation);
     }
     match signal {
-        Signal::NewTask(task) | Signal::NewTaskWithConfirmation(task, _) => {
+        Signal::Task(task) | Signal::TaskWithConfirmation(task, _) => {
             // Decrement wait queue length before running task.
             state.dec_waiting_queue_len();
             // If we were pending termination remove it since we got work.
