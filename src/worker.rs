@@ -47,6 +47,7 @@ fn handle_signal(signal: Signal, state: &State) {
 
     state.dec_waiting_queue_len();
 
+    // If we were pending timeout, clear it bc we got work.
     if let Ok(mut pending) = state.pending_timeout()
         && pending
             .as_ref()
@@ -55,6 +56,7 @@ fn handle_signal(signal: Signal, state: &State) {
         *pending = None;
     }
 
+    // Run the actuall task.
     let task_result = catch_unwind(|| task.run());
     if let Ok(panic_report) = PanicReport::try_from(task_result) {
         state.insert_panic_report(panic_report);
