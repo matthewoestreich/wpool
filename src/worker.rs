@@ -56,7 +56,7 @@ fn handle_signal(signal: Signal, state: &State) {
         *pending = None;
     }
 
-    // Run the actuall task.
+    // Run the actual task.
     let task_result = catch_unwind(|| task.run());
     if let Ok(panic_report) = PanicReport::try_from(task_result) {
         state.insert_panic_report(panic_report);
