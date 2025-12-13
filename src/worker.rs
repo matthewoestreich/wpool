@@ -61,6 +61,7 @@ fn handle_signal(signal: Signal, state: &State) {
     }
 }
 
+// Return false to break out of the worker loop.
 fn handle_recv_timeout(state: &State, min_workers: usize) -> bool {
     // We want to hold the lock for the duration of this block.
     let thread_id = thread::current().id();
