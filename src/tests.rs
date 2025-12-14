@@ -277,6 +277,22 @@ fn test_capture_example_in_readme() {
     wp.stop_wait();
 }
 
+#[test]
+fn test_pending_is_cleared() {
+    let wp = WPool::new(1);
+    // Wait for worker to be put in pending termination.
+    thread::sleep(WORKER_IDLE_TIMEOUT);
+    thread::sleep(Duration::from_millis(100));
+    assert!(
+        wp.get_worker_pending_timeout().is_some(),
+        "expected worker to be pending timeout"
+    );
+    wp.submit(|| {});
+    // Wait for worker to be removed from pending after submitting a job.
+    thread::sleep(Duration::from_millis(100));
+    assert!(wp.get_worker_pending_timeout().is_none());
+}
+
 /*
 #[test]
 fn test_signal_cannot_be_confirmed_more_than_once() {

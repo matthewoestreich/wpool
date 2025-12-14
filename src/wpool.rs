@@ -440,6 +440,14 @@ impl WPool {
         self.state.waiting_queue_len()
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn get_worker_pending_timeout(&self) -> Option<std::thread::ThreadId> {
+        if let Ok(pending) = self.state.pending_timeout() {
+            return *pending;
+        }
+        None
+    }
+
     /************************* Private methods ***************************************/
 
     /// Submit a Signal to the task channel.

@@ -36,7 +36,7 @@ pub(crate) fn spawn(task_receiver: Receiver<Signal>, state: State, min_workers: 
 }
 
 fn handle_signal(signal: Signal, state: &State) {
-    // Confirm signal if needed.
+    // For when `.sumit_confirm(..)` is called.
     if let Some(confirmation) = signal.take_confirm() {
         drop(confirmation);
     }
@@ -48,18 +48,23 @@ fn handle_signal(signal: Signal, state: &State) {
     state.dec_waiting_queue_len();
 
     // If we were pending timeout, clear it bc we got work.
+    clear_pending_if_pending(state);
+
+    // Run the actual task.
+    let task_result = catch_unwind(|| task.run());
+    if let Ok(panic_report) = PanicReport::try_from(task_result) {
+        state.insert_panic_report(panic_report);
+    }
+}
+
+// If current thread is pending timeout, remove it from pending.
+fn clear_pending_if_pending(state: &State) {
     if let Ok(mut pending) = state.pending_timeout()
         && pending
             .as_ref()
             .is_some_and(|&thread_id| thread_id == thread::current().id())
     {
         *pending = None;
-    }
-
-    // Run the actual task.
-    let task_result = catch_unwind(|| task.run());
-    if let Ok(panic_report) = PanicReport::try_from(task_result) {
-        state.insert_panic_report(panic_report);
     }
 }
 
@@ -82,6 +87,7 @@ fn handle_recv_timeout(state: &State, min_workers: usize) -> bool {
             }
         }
         None => {
+            println!("setting worker to pending timeout.");
             *pending = Some(thread_id);
         }
     }
