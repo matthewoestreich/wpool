@@ -87,7 +87,6 @@ fn handle_recv_timeout(state: &State, min_workers: usize) -> bool {
             }
         }
         None => {
-            println!("setting worker to pending timeout.");
             *pending = Some(thread_id);
         }
     }
