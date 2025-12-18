@@ -11,7 +11,9 @@ use std::{
 
 use crossbeam_channel::{RecvTimeoutError, TryRecvError};
 
-use crate::{Channel, WaitGroup, safe_lock, worker::WORKER_IDLE_TIMEOUT, wpool::WPool};
+use crate::{
+    Channel, WPoolStatus, WaitGroup, safe_lock, worker::WORKER_IDLE_TIMEOUT, wpool::WPool,
+};
 
 /*
 fn detect_leaky_threads<F>(f: F)
@@ -624,6 +626,21 @@ fn test_pause_resume_resets_resume_channel() {
         wp.resume();
     }
     wp.stop_wait();
+}
+
+#[test]
+fn test_wpoolstatus_from_u8() {
+    let status_two: u8 = 2;
+    let wpoolstatus_from_two = WPoolStatus::from(status_two);
+    assert_eq!(WPoolStatus::Stopped { now: false }, wpoolstatus_from_two);
+}
+
+#[test]
+#[should_panic]
+fn test_wpoolstatus_from_u8_using_out_of_range_u8() {
+    // We don't have 100 statuses....
+    let n: u8 = 100;
+    let _w = WPoolStatus::from(n);
 }
 
 #[test]

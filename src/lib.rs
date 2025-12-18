@@ -335,16 +335,6 @@ impl WPoolStatus {
             Self::Stopped { now: true } => 3,
         }
     }
-
-    pub(crate) fn from_u8(v: u8) -> Self {
-        match v {
-            0 => Self::Running,
-            1 => Self::Paused,
-            2 => Self::Stopped { now: false },
-            3 => Self::Stopped { now: true },
-            _ => unreachable!(),
-        }
-    }
 }
 
 impl Display for WPoolStatus {
@@ -353,6 +343,18 @@ impl Display for WPoolStatus {
             WPoolStatus::Running => write!(f, "WPoolStatus::Running"),
             WPoolStatus::Paused => write!(f, "WPoolStatus::Paused"),
             WPoolStatus::Stopped { now } => write!(f, "WPoolStatus::Stopped(now={now})"),
+        }
+    }
+}
+
+impl From<u8> for WPoolStatus {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => Self::Running,
+            1 => Self::Paused,
+            2 => Self::Stopped { now: false },
+            3 => Self::Stopped { now: true },
+            _ => unreachable!(),
         }
     }
 }
@@ -369,13 +371,13 @@ pub(crate) trait AsWPoolStatus {
 
 impl AsWPoolStatus for u8 {
     fn as_wpool_status(&self) -> WPoolStatus {
-        WPoolStatus::from_u8(*self)
+        WPoolStatus::from(*self)
     }
 }
 
 impl AsWPoolStatus for AtomicU8 {
     fn as_wpool_status(&self) -> WPoolStatus {
-        WPoolStatus::from_u8(self.load(Ordering::SeqCst))
+        WPoolStatus::from(self.load(Ordering::SeqCst))
     }
 }
 
